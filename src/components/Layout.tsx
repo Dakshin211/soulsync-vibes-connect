@@ -23,19 +23,33 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   };
 
   return (
-    <div className="flex h-screen bg-background overflow-hidden">
-      {/* Sidebar */}
-      <aside className="w-64 bg-sidebar border-r border-sidebar-border flex flex-col">
-        <div className="p-6">
-          <div className="flex items-center gap-2">
-            <Music className="w-8 h-8 text-primary" />
-            <h1 className="text-2xl font-bold bg-gradient-primary bg-clip-text text-transparent">
-              SoulSync
-            </h1>
-          </div>
+    <div className="flex flex-col h-screen bg-background overflow-hidden">
+      {/* Mobile Header */}
+      <header className="bg-sidebar border-b border-sidebar-border p-4 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Music className="w-6 h-6 text-primary" />
+          <h1 className="text-xl font-bold bg-gradient-primary bg-clip-text text-transparent">
+            SoulSync
+          </h1>
         </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleLogout}
+          className="text-sidebar-foreground hover:text-destructive"
+        >
+          <LogOut className="w-5 h-5" />
+        </Button>
+      </header>
 
-        <nav className="flex-1 px-3">
+      {/* Main Content */}
+      <main className="flex-1 overflow-y-auto pb-32">
+        {children}
+      </main>
+
+      {/* Bottom Navigation */}
+      <nav className="fixed bottom-0 left-0 right-0 bg-sidebar border-t border-sidebar-border z-40">
+        <div className="flex items-center justify-around px-2 py-3">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = location.pathname === item.path;
@@ -43,37 +57,19 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
               <Link
                 key={item.path}
                 to={item.path}
-                className={`flex items-center gap-3 px-4 py-3 rounded-lg mb-1 transition-all ${
+                className={`flex flex-col items-center gap-1 px-4 py-2 rounded-lg transition-all ${
                   isActive
-                    ? 'bg-sidebar-accent text-sidebar-accent-foreground shadow-glow-violet'
-                    : 'text-sidebar-foreground hover:bg-sidebar-accent/50'
+                    ? 'text-primary'
+                    : 'text-sidebar-foreground hover:text-primary'
                 }`}
               >
-                <Icon className="w-5 h-5" />
-                <span className="font-medium">{item.label}</span>
+                <Icon className={`w-6 h-6 ${isActive ? 'fill-primary' : ''}`} />
+                <span className="text-xs font-medium">{item.label}</span>
               </Link>
             );
           })}
-        </nav>
-
-        <div className="p-4 border-t border-sidebar-border">
-          <Button
-            variant="ghost"
-            onClick={handleLogout}
-            className="w-full justify-start gap-3 text-sidebar-foreground hover:text-destructive"
-          >
-            <LogOut className="w-5 h-5" />
-            <span>Logout</span>
-          </Button>
         </div>
-      </aside>
-
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col overflow-hidden">
-        <div className="flex-1 overflow-y-auto">
-          {children}
-        </div>
-      </main>
+      </nav>
     </div>
   );
 };

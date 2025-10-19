@@ -68,11 +68,12 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     if (isPlaying && playerRef.current) {
       progressIntervalRef.current = setInterval(() => {
         if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
-          playerRef.current.getCurrentTime().then((time: number) => {
+          const time = playerRef.current.getCurrentTime();
+          if (typeof time === 'number') {
             setCurrentTime(time);
-          });
+          }
         }
-      }, 1000);
+      }, 100); // Update more frequently for smoother timeline
     } else {
       if (progressIntervalRef.current) {
         clearInterval(progressIntervalRef.current);

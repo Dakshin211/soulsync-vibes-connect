@@ -1,27 +1,26 @@
-import React, { useEffect, useState } from 'react';
-import { Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Volume2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Play, Pause, SkipBack, SkipForward, Volume2, Shuffle, Repeat, Repeat1 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { useMusicPlayer } from '@/contexts/MusicPlayerContext';
-import YouTube from 'react-youtube';
+import YouTube, { YouTubeProps } from 'react-youtube';
 
 export default function NowPlaying() {
   const {
     currentSong,
     isPlaying,
-    currentTime,
-    duration,
-    volume,
-    shuffle,
-    repeat,
-    playSong,
-    pauseSong,
-    resumeSong,
     nextSong,
     prevSong,
+    pauseSong,
+    resumeSong,
+    currentTime,
+    duration,
     seekTo,
+    volume,
     setVolume,
+    shuffle,
     toggleShuffle,
+    repeat,
     toggleRepeat,
     playerRef,
     updateDuration,
@@ -29,47 +28,34 @@ export default function NowPlaying() {
 
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
 
-  useEffect(() => {
-    if (playerRef.current && isPlaying) {
-      playerRef.current.playVideo();
-    } else if (playerRef.current && !isPlaying) {
-      playerRef.current.pauseVideo();
-    }
-  }, [isPlaying, playerRef]);
-
-  useEffect(() => {
-    if (playerRef.current && volume !== undefined) {
-      playerRef.current.setVolume(volume);
-    }
-  }, [volume]);
-
   const formatTime = (seconds: number) => {
+    if (!seconds || isNaN(seconds)) return '0:00';
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const onPlayerReady = (event: any) => {
+  const onPlayerReady: YouTubeProps['onReady'] = (event) => {
     playerRef.current = event.target;
     event.target.setVolume(volume);
     updateDuration();
   };
 
-  const onPlayerStateChange = (event: any) => {
-    // 1 = playing, 0 = ended
-    if (event.data === 1) {
-      updateDuration();
-    } else if (event.data === 0) { // Video ended
+  const onPlayerStateChange: YouTubeProps['onStateChange'] = (event) => {
+    if (event.data === 0) {
       if (repeat === 'one') {
         event.target.seekTo(0);
         event.target.playVideo();
-      } else if (repeat === 'all') {
+      } else {
         nextSong();
       }
     }
+    if (event.data === 1) {
+      updateDuration();
+    }
   };
 
-  const opts = {
+  const opts: YouTubeProps['opts'] = {
     height: '0',
     width: '0',
     playerVars: {
@@ -77,12 +63,27 @@ export default function NowPlaying() {
     },
   };
 
+  useEffect(() => {
+    if (playerRef.current) {
+      if (isPlaying) {
+        playerRef.current.playVideo();
+      } else {
+        playerRef.current.pauseVideo();
+      }
+    }
+  }, [isPlaying]);
+
+  useEffect(() => {
+    if (playerRef.current) {
+      playerRef.current.setVolume(volume);
+    }
+  }, [volume]);
+
   if (!currentSong) return null;
 
   return (
     <>
-      {/* Hidden YouTube Player */}
-      <div className="hidden">
+      <div style={{ display: 'none' }}>
         <YouTube
           videoId={currentSong.id}
           opts={opts}
@@ -91,154 +92,133 @@ export default function NowPlaying() {
         />
       </div>
 
-      {/* Now Playing Bar */}
-      <div className="fixed bottom-16 md:bottom-0 left-0 right-0 bg-card/95 backdrop-blur-xl border-t border-border z-40">
-        <div className="max-w-screen-2xl mx-auto px-3 md:px-4 py-2 md:py-3">
-          {/* Mobile Layout */}
-          <div className="md:hidden space-y-1.5">
-            <div className="flex items-center gap-2">
-              <img
-                src={currentSong.thumbnail}
-                alt={currentSong.title}
-                className="w-11 h-11 rounded-md object-cover"
-              />
-              <div className="flex-1 min-w-0">
-                <p className="font-semibold truncate text-xs leading-tight">{currentSong.title}</p>
-                <p className="text-[10px] text-muted-foreground truncate">{currentSong.artist}</p>
-              </div>
-              <Button
-                size="sm"
-                className="bg-primary hover:bg-primary/90 w-9 h-9 rounded-full shrink-0"
-                onClick={isPlaying ? pauseSong : resumeSong}
-              >
-                {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
-              </Button>
-            </div>
+      <div className="fixed bottom-16 left-0 right-0 bg-sidebar border-t border-sidebar-border z-30 pb-2">
+        <div className="px-4 pt-2">
+          <Slider
+            value={[currentTime]}
+            min={0}
+            max={duration || 100}
+            step={1}
+            onValueChange={([value]) => seekTo(value)}
+            className="cursor-pointer"
+          />
+          <div className="flex justify-between text-xs text-muted-foreground mt-1">
+            <span>{formatTime(currentTime)}</span>
+            <span>{formatTime(duration)}</span>
+          </div>
+        </div>
 
-            <div className="flex items-center gap-1.5 text-[10px]">
-              <span className="text-muted-foreground min-w-[32px]">{formatTime(currentTime)}</span>
-              <Slider
-                value={[currentTime]}
-                max={duration || 100}
-                step={1}
-                onValueChange={([value]) => seekTo(value)}
-                className="flex-1"
-              />
-              <span className="text-muted-foreground min-w-[32px] text-right">{formatTime(duration)}</span>
+        <div className="px-4 py-2 md:hidden">
+          <div className="flex items-center gap-3 mb-3">
+            <img
+              src={currentSong.thumbnail}
+              alt={currentSong.title}
+              className="w-12 h-12 rounded object-cover"
+            />
+            <div className="flex-1 min-w-0">
+              <h4 className="font-semibold text-sm truncate">{currentSong.title}</h4>
+              <p className="text-xs text-muted-foreground truncate">{currentSong.artist}</p>
             </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={isPlaying ? pauseSong : resumeSong}
+              className="shrink-0"
+            >
+              {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
+            </Button>
+          </div>
+          
+          <div className="flex items-center justify-around">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={toggleShuffle}
+              className={shuffle ? 'text-primary' : ''}
+            >
+              <Shuffle className="w-4 h-4" />
+            </Button>
+            <Button variant="ghost" size="sm" onClick={prevSong}>
+              <SkipBack className="w-5 h-5" />
+            </Button>
+            <Button variant="ghost" size="sm" onClick={nextSong}>
+              <SkipForward className="w-5 h-5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={toggleRepeat}
+              className={repeat !== 'off' ? 'text-primary' : ''}
+            >
+              {repeat === 'one' ? <Repeat1 className="w-4 h-4" /> : <Repeat className="w-4 h-4" />}
+            </Button>
+          </div>
+        </div>
 
-            <div className="flex items-center justify-between px-4">
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={toggleShuffle}
-                className={`h-7 w-7 p-0 ${shuffle ? 'text-primary' : 'text-muted-foreground'}`}
-              >
-                <Shuffle className="w-3.5 h-3.5" />
-              </Button>
-              <Button size="sm" variant="ghost" onClick={prevSong} className="h-7 w-7 p-0">
-                <SkipBack className="w-4 h-4" />
-              </Button>
-              <div className="w-7" />
-              <Button size="sm" variant="ghost" onClick={nextSong} className="h-7 w-7 p-0">
-                <SkipForward className="w-4 h-4" />
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={toggleRepeat}
-                className={`h-7 w-7 p-0 ${repeat !== 'off' ? 'text-primary' : 'text-muted-foreground'}`}
-              >
-                <Repeat className="w-3.5 h-3.5" />
-              </Button>
+        <div className="hidden md:flex items-center justify-between px-6 py-3">
+          <div className="flex items-center gap-4 flex-1">
+            <img
+              src={currentSong.thumbnail}
+              alt={currentSong.title}
+              className="w-14 h-14 rounded object-cover"
+            />
+            <div className="min-w-0">
+              <h4 className="font-semibold truncate">{currentSong.title}</h4>
+              <p className="text-sm text-muted-foreground truncate">{currentSong.artist}</p>
             </div>
           </div>
 
-          {/* Desktop Layout */}
-          <div className="hidden md:grid md:grid-cols-3 md:gap-4 md:items-center">
-            {/* Song Info */}
-            <div className="flex items-center gap-4">
-              <img
-                src={currentSong.thumbnail}
-                alt={currentSong.title}
-                className="w-14 h-14 rounded-lg object-cover shadow-lg"
+          <div className="flex items-center gap-2 flex-1 justify-center">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={toggleShuffle}
+              className={shuffle ? 'text-primary' : ''}
+            >
+              <Shuffle className="w-4 h-4" />
+            </Button>
+            <Button variant="ghost" size="icon" onClick={prevSong}>
+              <SkipBack className="w-5 h-5" />
+            </Button>
+            <Button
+              variant="default"
+              size="icon"
+              onClick={isPlaying ? pauseSong : resumeSong}
+              className="bg-primary hover:bg-primary/90"
+            >
+              {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
+            </Button>
+            <Button variant="ghost" size="icon" onClick={nextSong}>
+              <SkipForward className="w-5 h-5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={toggleRepeat}
+              className={repeat !== 'off' ? 'text-primary' : ''}
+            >
+              {repeat === 'one' ? <Repeat1 className="w-4 h-4" /> : <Repeat className="w-4 h-4" />}
+            </Button>
+          </div>
+
+          <div className="flex items-center gap-2 flex-1 justify-end">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowVolumeSlider(!showVolumeSlider)}
+            >
+              <Volume2 className="w-5 h-5" />
+            </Button>
+            {showVolumeSlider && (
+              <Slider
+                value={[volume]}
+                min={0}
+                max={100}
+                step={1}
+                onValueChange={([value]) => setVolume(value)}
+                className="w-24"
               />
-              <div className="min-w-0">
-                <p className="font-semibold truncate">{currentSong.title}</p>
-                <p className="text-sm text-muted-foreground truncate">{currentSong.artist}</p>
-              </div>
-            </div>
-
-            {/* Player Controls */}
-            <div className="flex flex-col items-center gap-2">
-              <div className="flex items-center gap-4">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={toggleShuffle}
-                  className={shuffle ? 'text-primary' : 'text-muted-foreground'}
-                >
-                  <Shuffle className="w-4 h-4" />
-                </Button>
-                <Button size="sm" variant="ghost" onClick={prevSong}>
-                  <SkipBack className="w-5 h-5" />
-                </Button>
-                <Button
-                  size="sm"
-                  className="bg-primary hover:bg-primary/90 w-10 h-10 rounded-full"
-                  onClick={isPlaying ? pauseSong : resumeSong}
-                >
-                  {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
-                </Button>
-                <Button size="sm" variant="ghost" onClick={nextSong}>
-                  <SkipForward className="w-5 h-5" />
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={toggleRepeat}
-                  className={repeat !== 'off' ? 'text-primary' : 'text-muted-foreground'}
-                >
-                  <Repeat className="w-4 h-4" />
-                </Button>
-              </div>
-
-              <div className="flex items-center gap-3 w-full">
-                <span className="text-xs text-muted-foreground min-w-[40px]">
-                  {formatTime(currentTime)}
-                </span>
-                <Slider
-                  value={[currentTime]}
-                  max={duration || 100}
-                  step={1}
-                  onValueChange={([value]) => seekTo(value)}
-                  className="flex-1"
-                />
-                <span className="text-xs text-muted-foreground min-w-[40px]">
-                  {formatTime(duration)}
-                </span>
-              </div>
-            </div>
-
-            {/* Volume Control */}
-            <div className="flex items-center justify-end gap-2">
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setShowVolumeSlider(!showVolumeSlider)}
-              >
-                <Volume2 className="w-5 h-5" />
-              </Button>
-              {showVolumeSlider && (
-                <Slider
-                  value={[volume]}
-                  max={100}
-                  step={1}
-                  onValueChange={([value]) => setVolume(value)}
-                  className="w-24"
-                />
-              )}
-            </div>
+            )}
           </div>
         </div>
       </div>
