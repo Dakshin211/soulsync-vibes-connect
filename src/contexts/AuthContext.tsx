@@ -86,7 +86,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     logout,
   };
 
-  // Show favorite artists selection if needed
   if (needsFavoriteArtists && currentUser) {
     return (
       <AuthContext.Provider value={value}>
@@ -97,13 +96,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   return (
     <AuthContext.Provider value={value}>
-      {loading ? (
-        <div className="flex min-h-screen items-center justify-center bg-background">
-          <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
-        </div>
-      ) : (
-        children
-      )}
+      {children}
     </AuthContext.Provider>
   );
 };

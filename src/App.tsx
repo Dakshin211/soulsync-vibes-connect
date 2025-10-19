@@ -18,7 +18,16 @@ import NowPlaying from "./components/NowPlaying";
 const queryClient = new QueryClient();
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-  const { currentUser } = useAuth();
+  const { currentUser, loading } = useAuth();
+  
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+  
   return currentUser ? <Layout>{children}</Layout> : <Navigate to="/auth" />;
 };
 
