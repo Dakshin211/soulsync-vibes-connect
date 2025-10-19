@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useRef, useCallback } from 'react';
+import React, { createContext, useContext, useState, useRef, useCallback, useEffect } from 'react';
 
 interface Song {
   id: string;
@@ -30,6 +30,7 @@ interface MusicPlayerContextType {
   toggleShuffle: () => void;
   toggleRepeat: () => void;
   playerRef: React.MutableRefObject<any>;
+  updateDuration: () => void;
 }
 
 const MusicPlayerContext = createContext<MusicPlayerContextType | undefined>(undefined);
@@ -50,6 +51,40 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [shuffle, setShuffle] = useState(false);
   const [repeat, setRepeat] = useState<'off' | 'one' | 'all'>('off');
   const playerRef = useRef<any>(null);
+  const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Update duration when player is ready
+  const updateDuration = useCallback(() => {
+    if (playerRef.current && typeof playerRef.current.getDuration === 'function') {
+      const dur = playerRef.current.getDuration();
+      if (dur && !isNaN(dur)) {
+        setDuration(dur);
+      }
+    }
+  }, []);
+
+  // Track progress
+  useEffect(() => {
+    if (isPlaying && playerRef.current) {
+      progressIntervalRef.current = setInterval(() => {
+        if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
+          playerRef.current.getCurrentTime().then((time: number) => {
+            setCurrentTime(time);
+          });
+        }
+      }, 1000);
+    } else {
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+      }
+    }
+    
+    return () => {
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+      }
+    };
+  }, [isPlaying]);
 
   const playSong = useCallback((song: Song) => {
     setCurrentSong(song);
@@ -149,6 +184,7 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     toggleShuffle,
     toggleRepeat,
     playerRef,
+    updateDuration,
   };
 
   return (

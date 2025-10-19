@@ -24,6 +24,7 @@ export default function NowPlaying() {
     toggleShuffle,
     toggleRepeat,
     playerRef,
+    updateDuration,
   } = useMusicPlayer();
 
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
@@ -36,6 +37,12 @@ export default function NowPlaying() {
     }
   }, [isPlaying, playerRef]);
 
+  useEffect(() => {
+    if (playerRef.current && volume !== undefined) {
+      playerRef.current.setVolume(volume);
+    }
+  }, [volume]);
+
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
@@ -44,13 +51,15 @@ export default function NowPlaying() {
 
   const onPlayerReady = (event: any) => {
     playerRef.current = event.target;
-    if (volume) {
-      event.target.setVolume(volume);
-    }
+    event.target.setVolume(volume);
+    updateDuration();
   };
 
   const onPlayerStateChange = (event: any) => {
-    if (event.data === 0) { // Video ended
+    // 1 = playing, 0 = ended
+    if (event.data === 1) {
+      updateDuration();
+    } else if (event.data === 0) { // Video ended
       if (repeat === 'one') {
         event.target.seekTo(0);
         event.target.playVideo();
@@ -83,61 +92,66 @@ export default function NowPlaying() {
       </div>
 
       {/* Now Playing Bar */}
-      <div className="fixed bottom-0 left-0 right-0 bg-card/95 backdrop-blur-xl border-t border-border z-50">
-        <div className="container mx-auto px-4 py-3">
+      <div className="fixed bottom-16 md:bottom-0 left-0 right-0 bg-card/95 backdrop-blur-xl border-t border-border z-40">
+        <div className="max-w-screen-2xl mx-auto px-3 md:px-4 py-2 md:py-3">
           {/* Mobile Layout */}
-          <div className="md:hidden space-y-2">
-            <div className="flex items-center gap-3">
+          <div className="md:hidden space-y-1.5">
+            <div className="flex items-center gap-2">
               <img
                 src={currentSong.thumbnail}
                 alt={currentSong.title}
-                className="w-12 h-12 rounded-lg object-cover"
+                className="w-11 h-11 rounded-md object-cover"
               />
               <div className="flex-1 min-w-0">
-                <p className="font-semibold truncate text-sm">{currentSong.title}</p>
-                <p className="text-xs text-muted-foreground truncate">{currentSong.artist}</p>
+                <p className="font-semibold truncate text-xs leading-tight">{currentSong.title}</p>
+                <p className="text-[10px] text-muted-foreground truncate">{currentSong.artist}</p>
               </div>
+              <Button
+                size="sm"
+                className="bg-primary hover:bg-primary/90 w-9 h-9 rounded-full shrink-0"
+                onClick={isPlaying ? pauseSong : resumeSong}
+              >
+                {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
+              </Button>
             </div>
 
-            <div className="flex items-center justify-center gap-4">
+            <div className="flex items-center gap-1.5 text-[10px]">
+              <span className="text-muted-foreground min-w-[32px]">{formatTime(currentTime)}</span>
+              <Slider
+                value={[currentTime]}
+                max={duration || 100}
+                step={1}
+                onValueChange={([value]) => seekTo(value)}
+                className="flex-1"
+              />
+              <span className="text-muted-foreground min-w-[32px] text-right">{formatTime(duration)}</span>
+            </div>
+
+            <div className="flex items-center justify-between px-4">
               <Button
                 size="sm"
                 variant="ghost"
                 onClick={toggleShuffle}
-                className={shuffle ? 'text-primary' : 'text-muted-foreground'}
+                className={`h-7 w-7 p-0 ${shuffle ? 'text-primary' : 'text-muted-foreground'}`}
               >
-                <Shuffle className="w-4 h-4" />
+                <Shuffle className="w-3.5 h-3.5" />
               </Button>
-              <Button size="sm" variant="ghost" onClick={prevSong}>
+              <Button size="sm" variant="ghost" onClick={prevSong} className="h-7 w-7 p-0">
                 <SkipBack className="w-4 h-4" />
               </Button>
-              <Button
-                size="sm"
-                className="bg-primary hover:bg-primary/90 w-10 h-10 rounded-full"
-                onClick={isPlaying ? pauseSong : resumeSong}
-              >
-                {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={nextSong}>
+              <div className="w-7" />
+              <Button size="sm" variant="ghost" onClick={nextSong} className="h-7 w-7 p-0">
                 <SkipForward className="w-4 h-4" />
               </Button>
               <Button
                 size="sm"
                 variant="ghost"
                 onClick={toggleRepeat}
-                className={repeat !== 'off' ? 'text-primary' : 'text-muted-foreground'}
+                className={`h-7 w-7 p-0 ${repeat !== 'off' ? 'text-primary' : 'text-muted-foreground'}`}
               >
-                <Repeat className="w-4 h-4" />
+                <Repeat className="w-3.5 h-3.5" />
               </Button>
             </div>
-
-            <Slider
-              value={[currentTime]}
-              max={duration || 100}
-              step={1}
-              onValueChange={([value]) => seekTo(value)}
-              className="w-full"
-            />
           </div>
 
           {/* Desktop Layout */}
