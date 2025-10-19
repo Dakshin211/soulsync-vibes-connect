@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, signInWithPopup } from 'firebase/auth';
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { auth, db, googleProvider } from '@/lib/firebase';
+import FavoriteArtistsSelection from '@/components/FavoriteArtistsSelection';
 
 interface AuthContextType {
   currentUser: User | null;
@@ -23,6 +24,7 @@ export const useAuth = () => {
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [needsFavoriteArtists, setNeedsFavoriteArtists] = useState(false);
 
   const signup = async (email: string, password: string, username: string) => {
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
@@ -56,8 +58,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
+      
+      if (user) {
+        const userDoc = await getDoc(doc(db, 'Users', user.uid));
+        const userData = userDoc.data();
+        
+        if (!userData?.favoriteArtists || userData.favoriteArtists.length === 0) {
+          setNeedsFavoriteArtists(true);
+        } else {
+          setNeedsFavoriteArtists(false);
+        }
+      }
+      
       setLoading(false);
     });
     return unsubscribe;
@@ -71,6 +85,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     loginWithGoogle,
     logout,
   };
+
+  // Show favorite artists selection if needed
+  if (needsFavoriteArtists && currentUser) {
+    return (
+      <AuthContext.Provider value={value}>
+        <FavoriteArtistsSelection onComplete={() => setNeedsFavoriteArtists(false)} />
+      </AuthContext.Provider>
+    );
+  }
 
   return (
     <AuthContext.Provider value={value}>

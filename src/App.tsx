@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import { MusicPlayerProvider } from "./contexts/MusicPlayerContext";
 import { Layout } from "./components/Layout";
 import Auth from "./pages/Auth";
 import Home from "./pages/Home";
@@ -12,6 +13,7 @@ import Playlists from "./pages/Playlists";
 import Rooms from "./pages/Rooms";
 import Friends from "./pages/Friends";
 import NotFound from "./pages/NotFound";
+import NowPlaying from "./components/NowPlaying";
 
 const queryClient = new QueryClient();
 
@@ -27,15 +29,18 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <AuthProvider>
-          <Routes>
-            <Route path="/auth" element={<Auth />} />
-            <Route path="/" element={<ProtectedRoute><Home /></ProtectedRoute>} />
-            <Route path="/search" element={<ProtectedRoute><SearchPage /></ProtectedRoute>} />
-            <Route path="/playlists" element={<ProtectedRoute><Playlists /></ProtectedRoute>} />
-            <Route path="/rooms" element={<ProtectedRoute><Rooms /></ProtectedRoute>} />
-            <Route path="/friends" element={<ProtectedRoute><Friends /></ProtectedRoute>} />
-            <Route path="*" element={<NotFound />} />
-          </Routes>
+          <MusicPlayerProvider>
+            <Routes>
+              <Route path="/auth" element={<Auth />} />
+              <Route path="/" element={<ProtectedRoute><Home /></ProtectedRoute>} />
+              <Route path="/search" element={<ProtectedRoute><SearchPage /></ProtectedRoute>} />
+              <Route path="/playlists" element={<ProtectedRoute><Playlists /></ProtectedRoute>} />
+              <Route path="/rooms" element={<ProtectedRoute><Rooms /></ProtectedRoute>} />
+              <Route path="/friends" element={<ProtectedRoute><Friends /></ProtectedRoute>} />
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+            <NowPlaying />
+          </MusicPlayerProvider>
         </AuthProvider>
       </BrowserRouter>
     </TooltipProvider>
