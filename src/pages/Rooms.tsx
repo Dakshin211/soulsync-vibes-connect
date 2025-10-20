@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Radio, Users, Plus, Copy, LogOut as Leave, Music2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -6,11 +6,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMusicPlayer } from '@/contexts/MusicPlayerContext';
+import { realtimeDb } from '@/lib/firebaseRealtime';
+import { ref, set, onValue, remove, push, get } from 'firebase/database';
+import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { 
-  collection, addDoc, getDocs, deleteDoc, doc, query, 
-  onSnapshot, updateDoc, serverTimestamp, getDoc 
-} from 'firebase/firestore';
 import { toast } from 'sonner';
 
 interface Room {
@@ -20,14 +19,14 @@ interface Room {
   hostId: string;
   hostName: string;
   currentSong: any;
-  queue: any[];
-  users: string[];
-  createdAt: any;
+  currentTime: number;
+  isPlaying: boolean;
+  users: { [key: string]: boolean };
 }
 
 export default function Rooms() {
   const { currentUser } = useAuth();
-  const { playSong, currentSong, isPlaying } = useMusicPlayer();
+  const { playSong, pauseSong, resumeSong, currentSong, isPlaying, seekTo, currentTime } = useMusicPlayer();
   const [rooms, setRooms] = useState<Room[]>([]);
   const [currentRoom, setCurrentRoom] = useState<Room | null>(null);
   const [newRoomName, setNewRoomName] = useState('');
@@ -36,48 +35,71 @@ export default function Rooms() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
 
+  // Listen to all rooms
   useEffect(() => {
-    const unsubscribe = onSnapshot(collection(db, 'Rooms'), (snapshot) => {
-      const data = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as Room));
-      setRooms(data);
+    const roomsRef = ref(realtimeDb, 'rooms');
+    const unsubscribe = onValue(roomsRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const roomsList = Object.entries(data).map(([id, room]: [string, any]) => ({
+          id,
+          ...room,
+        }));
+        setRooms(roomsList);
+      } else {
+        setRooms([]);
+      }
     });
 
     return () => unsubscribe();
   }, []);
 
-  // Sync current song to room
-  useEffect(() => {
-    if (currentRoom && currentUser?.uid === currentRoom.hostId && currentSong) {
-      updateDoc(doc(db, 'Rooms', currentRoom.id), {
-        currentSong: {
-          id: currentSong.id,
-          title: currentSong.title,
-          artist: currentSong.artist,
-          thumbnail: currentSong.thumbnail,
-          isPlaying
-        }
-      });
-    }
-  }, [currentSong, isPlaying, currentRoom, currentUser]);
-
-  // Listen for room updates
+  // Sync room playback state
   useEffect(() => {
     if (!currentRoom || !currentUser) return;
 
-    const unsubscribe = onSnapshot(doc(db, 'Rooms', currentRoom.id), (snapshot) => {
-      const roomData = snapshot.data() as Room;
-      if (roomData && currentUser.uid !== roomData.hostId && roomData.currentSong) {
-        if (roomData.currentSong.isPlaying && roomData.currentSong.id !== currentSong?.id) {
-          playSong(roomData.currentSong);
+    const roomRef = ref(realtimeDb, `rooms/${currentRoom.id}`);
+    const unsubscribe = onValue(roomRef, (snapshot) => {
+      const data = snapshot.val();
+      if (!data) {
+        setCurrentRoom(null);
+        return;
+      }
+
+      // If user is not host, sync playback
+      if (currentUser.uid !== data.hostId) {
+        if (data.currentSong && data.currentSong.id !== currentSong?.id) {
+          playSong(data.currentSong);
+        }
+        
+        if (data.isPlaying && !isPlaying) {
+          resumeSong();
+        } else if (!data.isPlaying && isPlaying) {
+          pauseSong();
+        }
+
+        // Sync time (with tolerance for network delay)
+        if (Math.abs(data.currentTime - currentTime) > 2) {
+          seekTo(data.currentTime);
         }
       }
     });
 
     return () => unsubscribe();
   }, [currentRoom, currentUser]);
+
+  // Host: broadcast playback state
+  useEffect(() => {
+    if (!currentRoom || !currentUser || currentUser.uid !== currentRoom.hostId) return;
+
+    const roomRef = ref(realtimeDb, `rooms/${currentRoom.id}`);
+    set(roomRef, {
+      ...currentRoom,
+      currentSong: currentSong,
+      isPlaying: isPlaying,
+      currentTime: currentTime,
+    });
+  }, [currentSong, isPlaying, currentTime, currentRoom, currentUser]);
 
   const generateRoomCode = () => {
     return Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -92,20 +114,23 @@ export default function Rooms() {
       const userDoc = await getDoc(doc(db, 'Users', currentUser.uid));
       const userName = userDoc.data()?.username || currentUser.email?.split('@')[0] || 'User';
 
-      const roomRef = await addDoc(collection(db, 'Rooms'), {
+      const roomsRef = ref(realtimeDb, 'rooms');
+      const newRoomRef = push(roomsRef);
+      
+      const roomData = {
         name: newRoomName,
         code,
         hostId: currentUser.uid,
         hostName: userName,
         currentSong: null,
-        queue: [],
-        users: [currentUser.uid],
-        createdAt: serverTimestamp()
-      });
+        currentTime: 0,
+        isPlaying: false,
+        users: { [currentUser.uid]: true },
+      };
+
+      await set(newRoomRef, roomData);
       
-      const roomDoc = await getDoc(roomRef);
-      setCurrentRoom({ id: roomDoc.id, ...roomDoc.data() } as Room);
-      
+      setCurrentRoom({ id: newRoomRef.key!, ...roomData });
       toast.success(`Room created! Code: ${code}`);
       setNewRoomName('');
       setCreateDialogOpen(false);
@@ -121,21 +146,29 @@ export default function Rooms() {
     if (!currentUser || !joinCode.trim()) return;
     
     try {
-      const q = query(collection(db, 'Rooms'));
-      const snapshot = await getDocs(q);
-      const room = snapshot.docs.find(doc => doc.data().code === joinCode.toUpperCase());
+      const roomsRef = ref(realtimeDb, 'rooms');
+      const snapshot = await get(roomsRef);
+      const data = snapshot.val();
       
-      if (!room) {
+      if (!data) {
         toast.error('Room not found');
         return;
       }
 
-      const roomData = room.data();
-      await updateDoc(doc(db, 'Rooms', room.id), {
-        users: [...(roomData.users || []), currentUser.uid]
-      });
+      const roomEntry = Object.entries(data).find(([_, room]: [string, any]) => 
+        room.code === joinCode.toUpperCase()
+      );
 
-      setCurrentRoom({ id: room.id, ...roomData } as Room);
+      if (!roomEntry) {
+        toast.error('Room not found');
+        return;
+      }
+
+      const [roomId, roomData] = roomEntry as [string, any];
+      const roomRef = ref(realtimeDb, `rooms/${roomId}/users/${currentUser.uid}`);
+      await set(roomRef, true);
+
+      setCurrentRoom({ id: roomId, ...roomData });
       toast.success('Joined room!');
       setJoinCode('');
       setJoinDialogOpen(false);
@@ -150,12 +183,10 @@ export default function Rooms() {
 
     try {
       if (currentUser.uid === currentRoom.hostId) {
-        await deleteDoc(doc(db, 'Rooms', currentRoom.id));
+        await remove(ref(realtimeDb, `rooms/${currentRoom.id}`));
         toast.success('Room closed');
       } else {
-        await updateDoc(doc(db, 'Rooms', currentRoom.id), {
-          users: currentRoom.users.filter(uid => uid !== currentUser.uid)
-        });
+        await remove(ref(realtimeDb, `rooms/${currentRoom.id}/users/${currentUser.uid}`));
         toast.success('Left room');
       }
       setCurrentRoom(null);
@@ -171,39 +202,34 @@ export default function Rooms() {
   };
 
   if (currentRoom) {
+    const userCount = currentRoom.users ? Object.keys(currentRoom.users).length : 0;
+    
     return (
-      <div className="p-4 md:p-8 animate-fade-in">
+      <div className="p-4 pb-32 animate-fade-in bg-background">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-3xl md:text-4xl font-bold bg-gradient-primary bg-clip-text text-transparent">
+            <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">
               {currentRoom.name}
             </h1>
             <div className="flex items-center gap-2 mt-2">
               <code className="text-sm font-mono bg-muted px-3 py-1 rounded">
                 {currentRoom.code}
               </code>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => copyRoomCode(currentRoom.code)}
-              >
+              <Button size="sm" variant="ghost" onClick={() => copyRoomCode(currentRoom.code)}>
                 <Copy className="w-4 h-4" />
               </Button>
             </div>
           </div>
-          <Button
-            variant="destructive"
-            onClick={leaveRoom}
-          >
+          <Button variant="destructive" onClick={leaveRoom}>
             <Leave className="w-5 h-5 mr-2" />
-            {currentUser?.uid === currentRoom.hostId ? 'Close Room' : 'Leave'}
+            {currentUser?.uid === currentRoom.hostId ? 'Close' : 'Leave'}
           </Button>
         </div>
 
         <Card className="bg-card border-border p-6">
           <div className="flex items-center gap-2 mb-4">
             <Users className="w-5 h-5 text-primary" />
-            <span className="font-medium">{currentRoom.users.length} listening</span>
+            <span className="font-medium">{userCount} listening</span>
           </div>
 
           {currentRoom.currentSong ? (
@@ -233,17 +259,15 @@ export default function Rooms() {
   }
 
   return (
-    <div className="p-4 md:p-8 animate-fade-in">
+    <div className="p-4 pb-32 animate-fade-in bg-background">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-3xl md:text-4xl font-bold bg-gradient-primary bg-clip-text text-transparent">
+        <h1 className="text-3xl font-bold bg-gradient-primary bg-clip-text text-transparent">
           Music Rooms
         </h1>
         <div className="flex gap-2">
           <Dialog open={joinDialogOpen} onOpenChange={setJoinDialogOpen}>
             <DialogTrigger asChild>
-              <Button variant="outline" className="border-border">
-                Join Room
-              </Button>
+              <Button variant="outline" className="border-border">Join</Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
@@ -257,11 +281,7 @@ export default function Rooms() {
                   onKeyDown={(e) => e.key === 'Enter' && joinRoom()}
                   className="uppercase"
                 />
-                <Button 
-                  onClick={joinRoom}
-                  disabled={!joinCode.trim()}
-                  className="w-full bg-gradient-primary"
-                >
+                <Button onClick={joinRoom} disabled={!joinCode.trim()} className="w-full bg-gradient-primary">
                   Join
                 </Button>
               </div>
@@ -286,11 +306,7 @@ export default function Rooms() {
                   onChange={(e) => setNewRoomName(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && createRoom()}
                 />
-                <Button 
-                  onClick={createRoom}
-                  disabled={isCreating || !newRoomName.trim()}
-                  className="w-full bg-gradient-primary"
-                >
+                <Button onClick={createRoom} disabled={isCreating || !newRoomName.trim()} className="w-full bg-gradient-primary">
                   {isCreating ? 'Creating...' : 'Create Room'}
                 </Button>
               </div>
@@ -307,14 +323,15 @@ export default function Rooms() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {rooms.map((room) => (
-            <Card
-              key={room.id}
-              className="bg-card border-border hover:shadow-glow-violet transition-all cursor-pointer p-6"
-              onClick={() => setCurrentRoom(room)}
-            >
-              <div className="flex items-start justify-between mb-4">
-                <div className="flex items-center gap-3">
+          {rooms.map((room) => {
+            const userCount = room.users ? Object.keys(room.users).length : 0;
+            return (
+              <Card
+                key={room.id}
+                className="bg-card border-border hover:shadow-glow-violet transition-all cursor-pointer p-6"
+                onClick={() => setCurrentRoom(room)}
+              >
+                <div className="flex items-center gap-3 mb-4">
                   <div className="w-12 h-12 bg-gradient-primary rounded-full flex items-center justify-center">
                     <Radio className="w-6 h-6 text-white" />
                   </div>
@@ -323,19 +340,19 @@ export default function Rooms() {
                     <p className="text-sm text-muted-foreground">Host: {room.hostName}</p>
                   </div>
                 </div>
-              </div>
-              
-              <div className="flex items-center justify-between pt-4 border-t border-border">
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Users className="w-4 h-4" />
-                  <span className="text-sm">{room.users.length} listening</span>
+                
+                <div className="flex items-center justify-between pt-4 border-t border-border">
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Users className="w-4 h-4" />
+                    <span className="text-sm">{userCount} listening</span>
+                  </div>
+                  <code className="text-sm font-mono bg-muted px-3 py-1 rounded">
+                    {room.code}
+                  </code>
                 </div>
-                <code className="text-sm font-mono bg-muted px-3 py-1 rounded">
-                  {room.code}
-                </code>
-              </div>
-            </Card>
-          ))}
+              </Card>
+            );
+          })}
         </div>
       )}
     </div>

@@ -1,155 +1,202 @@
-import React, { useEffect, useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Play } from 'lucide-react';
 import { Card } from '@/components/ui/card';
+import { useMusicPlayer } from '@/contexts/MusicPlayerContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { getTrendingSongs, getArtistSongs, searchArtists, formatDuration, searchYouTube } from '@/services/youtubeApi';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { useAuth } from '@/contexts/AuthContext';
-import { useMusicPlayer } from '@/contexts/MusicPlayerContext';
-
-const YOUTUBE_API_KEY = 'AIzaSyBr_W9YzP9i9BS3zQmrn--ApqLegBnJWdw';
 
 interface Song {
   id: string;
   title: string;
   artist: string;
   thumbnail: string;
+  duration?: number;
+}
+
+interface Artist {
+  id: string;
+  name: string;
+  image: string;
 }
 
 export default function Home() {
-  const { currentUser } = useAuth();
   const { playSong, setQueue } = useMusicPlayer();
-  const [recommendedSongs, setRecommendedSongs] = useState<Song[]>([]);
+  const { currentUser } = useAuth();
   const [trendingSongs, setTrendingSongs] = useState<Song[]>([]);
+  const [recommendedSongs, setRecommendedSongs] = useState<Song[]>([]);
+  const [globalHits, setGlobalHits] = useState<Song[]>([]);
+  const [famousArtists, setFamousArtists] = useState<Artist[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadHomeData();
+    const fetchContent = async () => {
+      try {
+        setLoading(true);
+        
+        // Fetch trending songs
+        const trending = await getTrendingSongs(20);
+        setTrendingSongs(trending);
+        
+        // Fetch global hits
+        const hits = await searchYouTube('global hit songs 2024', 20);
+        setGlobalHits(hits);
+        
+        // Get user's favorite artists for recommendations
+        if (currentUser) {
+          const userDoc = await getDoc(doc(db, 'Users', currentUser.uid));
+          const favoriteArtists = userDoc.data()?.favoriteArtists || [];
+          
+          if (favoriteArtists.length > 0) {
+            const recommended: Song[] = [];
+            for (const artist of favoriteArtists.slice(0, 3)) {
+              const songs = await getArtistSongs(artist.name, 7);
+              recommended.push(...songs);
+            }
+            setRecommendedSongs(recommended.slice(0, 20));
+          }
+        }
+        
+        // Fetch famous artists
+        const artists = await searchArtists('popular music artists');
+        setFamousArtists(artists);
+      } catch (error) {
+        console.error('Error fetching content:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchContent();
   }, [currentUser]);
 
-  const loadHomeData = async () => {
-    if (!currentUser) return;
-
-    try {
-      const userDocRef = doc(db, 'Users', currentUser.uid);
-      const userDoc = await getDoc(userDocRef);
-      const userData = userDoc.data();
-      const favoriteArtists = userData?.favoriteArtists || [];
-
-      if (favoriteArtists.length > 0) {
-        const recommendedQuery = favoriteArtists.slice(0, 3).join(' ');
-        const recommended = await searchYouTube(recommendedQuery, 8);
-        setRecommendedSongs(recommended);
-      }
-
-      const trending = await searchYouTube('top hits 2024', 8);
-      setTrendingSongs(trending);
-
-      setLoading(false);
-    } catch (error) {
-      console.error('Error loading home data:', error);
-      setLoading(false);
-    }
-  };
-
-  const searchYouTube = async (query: string, maxResults: number = 8): Promise<Song[]> => {
-    try {
-      const response = await fetch(
-        `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(
-          query + ' official music'
-        )}&type=video&videoCategoryId=10&maxResults=${maxResults * 2}&key=${YOUTUBE_API_KEY}`
-      );
-      const data = await response.json();
-      if (!data.items) return [];
-
-      const videoIds = data.items.map((item: any) => item.id.videoId).join(',');
-      const detailsResponse = await fetch(
-        `https://www.googleapis.com/youtube/v3/videos?part=contentDetails,snippet&id=${videoIds}&key=${YOUTUBE_API_KEY}`
-      );
-      const detailsData = await detailsResponse.json();
-
-      return detailsData.items?.filter((item: any) => {
-        const duration = item.contentDetails.duration;
-        const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-        if (!match) return false;
-        const totalSec = (parseInt(match[1]||'0')*3600) + (parseInt(match[2]||'0')*60) + parseInt(match[3]||'0');
-        return totalSec >= 60 && totalSec <= 900;
-      }).slice(0, maxResults).map((item: any) => ({
-        id: item.id,
-        title: item.snippet.title,
-        artist: item.snippet.channelTitle,
-        thumbnail: item.snippet.thumbnails.medium?.url,
-      })) || [];
-    } catch (error) {
-      console.error('YouTube search error:', error);
-      return [];
-    }
-  };
-
-  const handlePlaySong = (song: Song, songList: Song[]) => {
+  const handlePlaySong = (song: Song, allSongs: Song[]) => {
     playSong(song);
-    setQueue(songList);
+    setQueue(allSongs);
+  };
+
+  const handleArtistClick = async (artist: Artist) => {
+    const songs = await getArtistSongs(artist.name, 20);
+    if (songs.length > 0) {
+      playSong(songs[0]);
+      setQueue(songs);
+    }
   };
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+      <div className="flex items-center justify-center min-h-screen bg-background">
+        <div className="flex flex-col items-center gap-4 animate-fade-in">
+          <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-muted-foreground">Loading your music...</p>
+        </div>
       </div>
     );
   }
 
-  return (
-    <div className="p-3 md:p-8 space-y-4 md:space-y-8 animate-fade-in pb-36 md:pb-32">
-      <div className="relative overflow-hidden rounded-xl md:rounded-2xl bg-gradient-primary p-6 md:p-12 shadow-glow-violet">
-        <div className="relative z-10">
-          <h1 className="text-2xl md:text-5xl font-bold text-white mb-2 md:mb-4">Welcome to SoulSync</h1>
-          <p className="text-sm md:text-xl text-white/90">Discover and sync your music</p>
+  const SongCard = ({ song, onClick }: { song: Song; onClick: () => void }) => (
+    <Card 
+      className="flex-shrink-0 w-36 bg-card/50 backdrop-blur border-border hover:bg-card/80 transition-all cursor-pointer group"
+      onClick={onClick}
+    >
+      <div className="relative">
+        <img 
+          src={song.thumbnail} 
+          alt={song.title}
+          className="w-full h-36 object-cover rounded-t"
+        />
+        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+          <Play className="w-12 h-12 text-white" fill="white" />
         </div>
       </div>
+      <div className="p-2">
+        <h3 className="font-semibold text-sm truncate">{song.title}</h3>
+        <p className="text-xs text-muted-foreground truncate">{song.artist}</p>
+        {song.duration && (
+          <p className="text-xs text-muted-foreground mt-1">{formatDuration(song.duration)}</p>
+        )}
+      </div>
+    </Card>
+  );
 
+  const ArtistCard = ({ artist, onClick }: { artist: Artist; onClick: () => void }) => (
+    <div 
+      className="flex-shrink-0 w-32 cursor-pointer group"
+      onClick={onClick}
+    >
+      <div className="relative mb-2">
+        <img 
+          src={artist.image} 
+          alt={artist.name}
+          className="w-32 h-32 rounded-full object-cover border-2 border-primary/20 group-hover:border-primary transition-all"
+        />
+      </div>
+      <p className="text-sm font-medium text-center truncate">{artist.name}</p>
+    </div>
+  );
+
+  return (
+    <div className="p-4 pb-32 animate-fade-in bg-background">
+      <h1 className="text-3xl font-bold mb-6 bg-gradient-primary bg-clip-text text-transparent">
+        Home
+      </h1>
+
+      {/* Top Trending Section */}
+      <section className="mb-8">
+        <h2 className="text-xl font-bold mb-3">Top Trending</h2>
+        <div className="flex gap-3 overflow-x-auto pb-4 scrollbar-hide">
+          {trendingSongs.slice(0, 10).map((song) => (
+            <SongCard 
+              key={song.id}
+              song={song}
+              onClick={() => handlePlaySong(song, trendingSongs)}
+            />
+          ))}
+        </div>
+      </section>
+
+      {/* Recommended For You Section */}
       {recommendedSongs.length > 0 && (
-        <section>
-          <h2 className="text-lg md:text-3xl font-bold mb-3 md:mb-6 bg-gradient-primary bg-clip-text text-transparent">Recommended</h2>
-          <div className="overflow-x-auto -mx-3 px-3 md:mx-0 md:px-0 scrollbar-hide">
-            <div className="flex md:grid md:grid-cols-2 lg:grid-cols-5 gap-3 md:gap-6 pb-2">
-              {recommendedSongs.map((song) => (
-                <Card key={song.id} onClick={() => handlePlaySong(song, recommendedSongs)} className="group flex-shrink-0 w-[140px] md:w-auto bg-card border-border hover:bg-card/80 transition-all cursor-pointer">
-                  <div className="aspect-square relative overflow-hidden">
-                    <img src={song.thumbnail} alt={song.title} className="w-full h-full object-cover" />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                      <div className="w-12 md:w-16 h-12 md:h-16 bg-primary rounded-full flex items-center justify-center"><Play className="w-6 md:w-8 h-6 md:h-8 text-white ml-0.5" /></div>
-                    </div>
-                  </div>
-                  <div className="p-2 md:p-4">
-                    <h3 className="font-semibold text-xs md:text-base line-clamp-1">{song.title}</h3>
-                    <p className="text-[10px] md:text-sm text-muted-foreground line-clamp-1">{song.artist}</p>
-                  </div>
-                </Card>
-              ))}
-            </div>
+        <section className="mb-8">
+          <h2 className="text-xl font-bold mb-3">Recommended For You</h2>
+          <div className="flex gap-3 overflow-x-auto pb-4 scrollbar-hide">
+            {recommendedSongs.slice(0, 10).map((song) => (
+              <SongCard 
+                key={song.id}
+                song={song}
+                onClick={() => handlePlaySong(song, recommendedSongs)}
+              />
+            ))}
           </div>
         </section>
       )}
 
-      <section>
-        <h2 className="text-lg md:text-3xl font-bold mb-3 md:mb-6 bg-gradient-primary bg-clip-text text-transparent">Trending</h2>
-        <div className="overflow-x-auto -mx-3 px-3 md:mx-0 md:px-0 scrollbar-hide">
-          <div className="flex md:grid md:grid-cols-2 lg:grid-cols-5 gap-3 md:gap-6 pb-2">
-            {trendingSongs.map((song) => (
-              <Card key={song.id} onClick={() => handlePlaySong(song, trendingSongs)} className="group flex-shrink-0 w-[140px] md:w-auto bg-card border-border hover:bg-card/80 transition-all cursor-pointer">
-                <div className="aspect-square relative overflow-hidden">
-                  <img src={song.thumbnail} alt={song.title} className="w-full h-full object-cover" />
-                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                    <div className="w-12 md:w-16 h-12 md:h-16 bg-primary rounded-full flex items-center justify-center"><Play className="w-6 md:w-8 h-6 md:h-8 text-white ml-0.5" /></div>
-                  </div>
-                </div>
-                <div className="p-2 md:p-4">
-                  <h3 className="font-semibold text-xs md:text-base line-clamp-1">{song.title}</h3>
-                  <p className="text-[10px] md:text-sm text-muted-foreground line-clamp-1">{song.artist}</p>
-                </div>
-              </Card>
-            ))}
-          </div>
+      {/* Global Hit Songs Section */}
+      <section className="mb-8">
+        <h2 className="text-xl font-bold mb-3">Global Hit Songs</h2>
+        <div className="flex gap-3 overflow-x-auto pb-4 scrollbar-hide">
+          {globalHits.slice(0, 10).map((song) => (
+            <SongCard 
+              key={song.id}
+              song={song}
+              onClick={() => handlePlaySong(song, globalHits)}
+            />
+          ))}
+        </div>
+      </section>
+
+      {/* Famous Artists Section */}
+      <section className="mb-8">
+        <h2 className="text-xl font-bold mb-3">Famous Artists</h2>
+        <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-hide">
+          {famousArtists.map((artist) => (
+            <ArtistCard 
+              key={artist.id}
+              artist={artist}
+              onClick={() => handleArtistClick(artist)}
+            />
+          ))}
         </div>
       </section>
     </div>

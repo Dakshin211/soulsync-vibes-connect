@@ -42,14 +42,17 @@ export default function NowPlaying() {
   };
 
   const onPlayerStateChange: YouTubeProps['onStateChange'] = (event) => {
+    // Video ended (state 0)
     if (event.data === 0) {
       if (repeat === 'one') {
         event.target.seekTo(0);
         event.target.playVideo();
-      } else {
+      } else if (repeat === 'all' || repeat === 'off') {
+        // Autoplay next song
         nextSong();
       }
     }
+    // Video playing (state 1)
     if (event.data === 1) {
       updateDuration();
     }
