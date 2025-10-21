@@ -35,17 +35,29 @@ export default function Rooms() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
 
-  // Listen to all rooms
+  // Listen to all rooms and auto-delete empty ones
   useEffect(() => {
     const roomsRef = ref(realtimeDb, 'rooms');
-    const unsubscribe = onValue(roomsRef, (snapshot) => {
+    const unsubscribe = onValue(roomsRef, async (snapshot) => {
       const data = snapshot.val();
       if (data) {
         const roomsList = Object.entries(data).map(([id, room]: [string, any]) => ({
           id,
           ...room,
         }));
-        setRooms(roomsList);
+        
+        // Auto-delete rooms with no users
+        for (const room of roomsList) {
+          const userCount = room.users ? Object.keys(room.users).length : 0;
+          if (userCount === 0) {
+            await remove(ref(realtimeDb, `rooms/${room.id}`));
+          }
+        }
+        
+        setRooms(roomsList.filter(room => {
+          const userCount = room.users ? Object.keys(room.users).length : 0;
+          return userCount > 0;
+        }));
       } else {
         setRooms([]);
       }

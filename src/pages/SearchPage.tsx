@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Search, Play, Clock } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Card } from '@/components/ui/card';
@@ -26,6 +26,7 @@ export default function SearchPage() {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
   const { playSong, setQueue } = useMusicPlayer();
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     loadRecentSearches();
@@ -78,19 +79,45 @@ export default function SearchPage() {
   };
 
   const handleSearch = async (searchQuery: string) => {
-    if (!searchQuery.trim()) return;
+    if (!searchQuery.trim()) {
+      setResults([]);
+      return;
+    }
     setLoading(true);
     setShowSuggestions(false);
     
     try {
       const songs = await searchYouTube(searchQuery, 20);
-      setResults(songs);
+      // Filter for full-length tracks (1-15 minutes)
+      const filteredSongs = songs.filter(song => {
+        const duration = song.duration || 0;
+        return duration >= 60 && duration <= 900;
+      });
+      setResults(filteredSongs);
       saveSearch(searchQuery);
     } catch (error) {
       console.error('Search error:', error);
       setResults([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleQueryChange = (value: string) => {
+    setQuery(value);
+    
+    // Clear previous timeout
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+    
+    // Debounce search by 300ms
+    if (value.trim()) {
+      debounceTimerRef.current = setTimeout(() => {
+        handleSearch(value);
+      }, 300);
+    } else {
+      setResults([]);
     }
   };
 
@@ -110,7 +137,7 @@ export default function SearchPage() {
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground w-5 h-5" />
           <Input 
             value={query} 
-            onChange={(e) => setQuery(e.target.value)} 
+            onChange={(e) => handleQueryChange(e.target.value)} 
             onFocus={() => setShowSuggestions(true)} 
             onBlur={() => setTimeout(() => setShowSuggestions(false), 200)} 
             placeholder="Search songs, artists..." 

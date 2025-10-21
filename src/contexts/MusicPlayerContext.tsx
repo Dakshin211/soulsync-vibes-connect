@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useRef, useCallback, useEffect } from 'react';
 import { getSimilarTracks, getRandomRecommendation } from '@/services/recommendationApi';
 import { searchYouTube } from '@/services/youtubeApi';
+import { getGroqRecommendations } from '@/services/groqApi';
 
 interface Song {
   id: string;
@@ -54,6 +55,7 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [repeat, setRepeat] = useState<'off' | 'one' | 'all'>('off');
   const playerRef = useRef<any>(null);
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [recentlyPlayed, setRecentlyPlayed] = useState<string[]>([]); // Track last 3 songs to avoid repetition
 
   // Update duration when player is ready
   const updateDuration = useCallback(() => {
@@ -114,21 +116,41 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       nextIndex = Math.floor(Math.random() * queue.length);
       setCurrentSong(queue[nextIndex]);
       setIsPlaying(true);
+      // Update recently played
+      if (queue[nextIndex]) {
+        setRecentlyPlayed(prev => [queue[nextIndex].id, ...prev.slice(0, 2)]);
+      }
     } else {
       nextIndex = (currentIndex + 1) % queue.length;
       
       // If we're at the end of queue, get smart recommendations
       if (nextIndex === 0 && currentSong && repeat === 'off') {
         try {
-          const recommendations = await getSimilarTracks(currentSong.artist, currentSong.title);
+          // Try Last.fm first
+          let recommendations = await getSimilarTracks(currentSong.artist, currentSong.title);
+          
+          // Fallback to Groq if Last.fm fails
+          if (recommendations.length === 0) {
+            console.log('Last.fm failed, trying Groq...');
+            recommendations = await getGroqRecommendations(currentSong.artist, currentSong.title);
+          }
+          
           if (recommendations.length > 0) {
-            const randomRec = getRandomRecommendation(recommendations);
+            // Filter out recently played songs to avoid repetition
+            const filteredRecs = recommendations.filter(
+              rec => !recentlyPlayed.includes(`${rec.artist}-${rec.title}`)
+            );
+            
+            const recsToUse = filteredRecs.length > 0 ? filteredRecs : recommendations;
+            const randomRec = getRandomRecommendation(recsToUse.slice(0, 5));
+            
             if (randomRec) {
               const searchResults = await searchYouTube(`${randomRec.artist} ${randomRec.title}`, 1);
               if (searchResults.length > 0) {
                 setQueueState(prev => [...prev, searchResults[0]]);
                 setCurrentSong(searchResults[0]);
                 setIsPlaying(true);
+                setRecentlyPlayed(prev => [searchResults[0].id, ...prev.slice(0, 2)]);
                 return;
               }
             }
@@ -140,8 +162,12 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       
       setCurrentSong(queue[nextIndex]);
       setIsPlaying(true);
+      // Update recently played
+      if (queue[nextIndex]) {
+        setRecentlyPlayed(prev => [queue[nextIndex].id, ...prev.slice(0, 2)]);
+      }
     }
-  }, [queue, currentSong, shuffle, repeat]);
+  }, [queue, currentSong, shuffle, repeat, recentlyPlayed]);
 
   const prevSong = useCallback(() => {
     if (queue.length === 0) return;
