@@ -1,8 +1,9 @@
 import React from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Home, Search, ListMusic, Radio, Users, Music, LogOut } from 'lucide-react';
+import { Home, Search, ListMusic, Radio, Users, LogOut } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
+import logo from '@/assets/logo.png';
 
 const navItems = [
   { icon: Home, label: 'Home', path: '/' },
@@ -25,9 +26,9 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   return (
     <div className="flex flex-col h-screen bg-background overflow-hidden">
       {/* Mobile Header */}
-      <header className="bg-sidebar border-b border-sidebar-border p-4 flex items-center justify-between">
+      <header className="bg-sidebar border-b border-sidebar-border p-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Music className="w-6 h-6 text-primary" />
+          <img src={logo} alt="SoulSync" className="w-8 h-8 object-contain" />
           <h1 className="text-xl font-bold bg-gradient-primary bg-clip-text text-transparent">
             SoulSync
           </h1>

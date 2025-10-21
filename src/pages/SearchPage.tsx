@@ -5,10 +5,10 @@ import { Card } from '@/components/ui/card';
 import { useMusicPlayer } from '@/contexts/MusicPlayerContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { searchYouTube, formatDuration } from '@/services/youtubeApi';
-import { collection, addDoc, query as firestoreQuery, where, orderBy, limit, getDocs, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, query as firestoreQuery, where, orderBy, limit, getDocs, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 
-const SUGGESTIONS = ['Top hits 2024', 'Chill vibes', 'Workout music', 'Party songs', 'Love songs'];
+// No longer using hardcoded suggestions
 
 interface Song {
   id: string;
@@ -53,6 +53,19 @@ export default function SearchPage() {
     if (!currentUser || !searchQuery.trim()) return;
     
     try {
+      // Check if we have more than 10 searches, delete oldest
+      const allSearchesQuery = firestoreQuery(
+        collection(db, 'RecentSearches'),
+        where('userId', '==', currentUser.uid),
+        orderBy('timestamp', 'desc')
+      );
+      const allSnapshot = await getDocs(allSearchesQuery);
+      
+      if (allSnapshot.docs.length >= 10) {
+        const oldestDoc = allSnapshot.docs[allSnapshot.docs.length - 1];
+        await deleteDoc(oldestDoc.ref);
+      }
+      
       await addDoc(collection(db, 'RecentSearches'), {
         userId: currentUser.uid,
         query: searchQuery,
@@ -104,33 +117,17 @@ export default function SearchPage() {
             className="pl-12 py-6 text-base bg-card border-border rounded-xl" 
           />
           
-          {showSuggestions && !results.length && (
-            <Card className="absolute z-10 w-full mt-2 p-2 bg-card border-border">
-              {recentSearches.length > 0 && (
-                <>
-                  <div className="px-3 py-2 text-xs text-muted-foreground font-semibold">Recent Searches</div>
-                  {recentSearches.map((search, i) => (
-                    <div 
-                      key={i} 
-                      onClick={() => { setQuery(search); handleSearch(search); }} 
-                      className="flex items-center gap-3 px-3 py-2 hover:bg-muted rounded-lg cursor-pointer"
-                    >
-                      <Clock className="w-4 h-4 text-muted-foreground" />
-                      <span className="text-sm">{search}</span>
-                    </div>
-                  ))}
-                  <div className="border-t border-border my-2"></div>
-                </>
-              )}
-              <div className="px-3 py-2 text-xs text-muted-foreground font-semibold">Suggestions</div>
-              {SUGGESTIONS.map((s, i) => (
+          {showSuggestions && !results.length && recentSearches.length > 0 && (
+            <Card className="absolute z-10 w-full mt-2 p-2 bg-card border-border animate-fade-in">
+              <div className="px-3 py-2 text-xs text-muted-foreground font-semibold">Recent Searches</div>
+              {recentSearches.map((search, i) => (
                 <div 
                   key={i} 
-                  onClick={() => { setQuery(s); handleSearch(s); }} 
-                  className="flex items-center gap-3 px-3 py-2 hover:bg-muted rounded-lg cursor-pointer"
+                  onClick={() => { setQuery(search); handleSearch(search); }} 
+                  className="flex items-center gap-3 px-3 py-2 hover:bg-muted rounded-lg cursor-pointer transition-colors"
                 >
-                  <Search className="w-4 h-4 text-muted-foreground" />
-                  <span className="text-sm">{s}</span>
+                  <Clock className="w-4 h-4 text-muted-foreground" />
+                  <span className="text-sm">{search}</span>
                 </div>
               ))}
             </Card>
@@ -138,8 +135,11 @@ export default function SearchPage() {
         </form>
         
         {loading && (
-          <div className="flex justify-center py-12">
-            <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+          <div className="flex justify-center py-12 animate-fade-in">
+            <div className="flex flex-col items-center gap-3">
+              <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+              <p className="text-sm text-muted-foreground">Searching...</p>
+            </div>
           </div>
         )}
         

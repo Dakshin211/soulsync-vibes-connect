@@ -1,4 +1,6 @@
 import React, { createContext, useContext, useState, useRef, useCallback, useEffect } from 'react';
+import { getSimilarTracks, getRandomRecommendation } from '@/services/recommendationApi';
+import { searchYouTube } from '@/services/youtubeApi';
 
 interface Song {
   id: string;
@@ -102,7 +104,7 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
   }, [currentSong]);
 
-  const nextSong = useCallback(() => {
+  const nextSong = useCallback(async () => {
     if (queue.length === 0) return;
     
     const currentIndex = queue.findIndex(s => s.id === currentSong?.id);
@@ -110,13 +112,36 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     if (shuffle) {
       nextIndex = Math.floor(Math.random() * queue.length);
+      setCurrentSong(queue[nextIndex]);
+      setIsPlaying(true);
     } else {
       nextIndex = (currentIndex + 1) % queue.length;
+      
+      // If we're at the end of queue, get smart recommendations
+      if (nextIndex === 0 && currentSong && repeat === 'off') {
+        try {
+          const recommendations = await getSimilarTracks(currentSong.artist, currentSong.title);
+          if (recommendations.length > 0) {
+            const randomRec = getRandomRecommendation(recommendations);
+            if (randomRec) {
+              const searchResults = await searchYouTube(`${randomRec.artist} ${randomRec.title}`, 1);
+              if (searchResults.length > 0) {
+                setQueueState(prev => [...prev, searchResults[0]]);
+                setCurrentSong(searchResults[0]);
+                setIsPlaying(true);
+                return;
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Error getting recommendations:', error);
+        }
+      }
+      
+      setCurrentSong(queue[nextIndex]);
+      setIsPlaying(true);
     }
-
-    setCurrentSong(queue[nextIndex]);
-    setIsPlaying(true);
-  }, [queue, currentSong, shuffle]);
+  }, [queue, currentSong, shuffle, repeat]);
 
   const prevSong = useCallback(() => {
     if (queue.length === 0) return;

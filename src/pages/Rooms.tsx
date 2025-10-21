@@ -54,11 +54,13 @@ export default function Rooms() {
     return () => unsubscribe();
   }, []);
 
-  // Sync room playback state
+  // Sync room playback state - ALL users sync, any user can control
   useEffect(() => {
     if (!currentRoom || !currentUser) return;
 
     const roomRef = ref(realtimeDb, `rooms/${currentRoom.id}`);
+    let isUpdating = false;
+    
     const unsubscribe = onValue(roomRef, (snapshot) => {
       const data = snapshot.val();
       if (!data) {
@@ -66,40 +68,57 @@ export default function Rooms() {
         return;
       }
 
-      // If user is not host, sync playback
-      if (currentUser.uid !== data.hostId) {
-        if (data.currentSong && data.currentSong.id !== currentSong?.id) {
-          playSong(data.currentSong);
-        }
-        
-        if (data.isPlaying && !isPlaying) {
+      if (isUpdating) return;
+
+      // All users sync to room state
+      if (data.currentSong && data.currentSong.id !== currentSong?.id) {
+        playSong(data.currentSong);
+      }
+      
+      if (data.isPlaying !== isPlaying) {
+        if (data.isPlaying) {
           resumeSong();
-        } else if (!data.isPlaying && isPlaying) {
+        } else {
           pauseSong();
         }
-
-        // Sync time (with tolerance for network delay)
-        if (Math.abs(data.currentTime - currentTime) > 2) {
-          seekTo(data.currentTime);
-        }
       }
+
+      // Sync time (with tolerance for network delay)
+      if (Math.abs(data.currentTime - currentTime) > 2) {
+        seekTo(data.currentTime);
+      }
+      
+      setCurrentRoom(data);
     });
 
     return () => unsubscribe();
-  }, [currentRoom, currentUser]);
+  }, [currentRoom?.id, currentUser]);
 
-  // Host: broadcast playback state
+  // Broadcast playback state - ANY user can update
   useEffect(() => {
-    if (!currentRoom || !currentUser || currentUser.uid !== currentRoom.hostId) return;
+    if (!currentRoom || !currentUser) return;
 
-    const roomRef = ref(realtimeDb, `rooms/${currentRoom.id}`);
-    set(roomRef, {
-      ...currentRoom,
-      currentSong: currentSong,
-      isPlaying: isPlaying,
-      currentTime: currentTime,
-    });
-  }, [currentSong, isPlaying, currentTime, currentRoom, currentUser]);
+    const updateRoom = async () => {
+      const roomRef = ref(realtimeDb, `rooms/${currentRoom.id}`);
+      const snapshot = await get(roomRef);
+      const currentData = snapshot.val();
+      
+      // Only update if values actually changed
+      if (currentData &&
+          (currentData.currentSong?.id !== currentSong?.id ||
+           currentData.isPlaying !== isPlaying ||
+           Math.abs(currentData.currentTime - currentTime) > 0.5)) {
+        await set(roomRef, {
+          ...currentData,
+          currentSong: currentSong,
+          isPlaying: isPlaying,
+          currentTime: currentTime,
+        });
+      }
+    };
+
+    updateRoom();
+  }, [currentSong, isPlaying, currentTime, currentRoom?.id, currentUser]);
 
   const generateRoomCode = () => {
     return Math.random().toString(36).substring(2, 8).toUpperCase();
