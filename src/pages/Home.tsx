@@ -87,15 +87,16 @@ export default function Home() {
         }
         setFamousArtists(artists);
         
-        // Get user's favorite artists for recommendations
+        // Get user's favorite artists for recommendations (their famous songs)
         if (currentUser) {
           const userDoc = await getDoc(doc(db, 'Users', currentUser.uid));
           const favoriteArtists = userDoc.data()?.favoriteArtists || [];
           
           if (favoriteArtists.length > 0) {
             const recommended: Song[] = [];
-            for (const artist of favoriteArtists.slice(0, 3)) {
-              const songs = await getArtistSongs(artist.name, 7);
+            for (const artist of favoriteArtists.slice(0, 5)) {
+              // Search for the artist's most popular/famous songs
+              const songs = await getArtistSongs(`${artist.name} top songs popular`, 5);
               recommended.push(...songs);
             }
             setRecommendedSongs(recommended.slice(0, 20));

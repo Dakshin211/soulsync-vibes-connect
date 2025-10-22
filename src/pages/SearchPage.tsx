@@ -24,6 +24,7 @@ export default function SearchPage() {
   const [results, setResults] = useState<Song[]>([]);
   const [loading, setLoading] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
   const { playSong, setQueue } = useMusicPlayer();
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -31,6 +32,30 @@ export default function SearchPage() {
   useEffect(() => {
     loadRecentSearches();
   }, [currentUser]);
+
+  // Fetch Google suggestions as user types
+  useEffect(() => {
+    if (!query.trim()) {
+      setSuggestions([]);
+      return;
+    }
+
+    const fetchSuggestions = async () => {
+      try {
+        const response = await fetch(
+          `https://suggestqueries.google.com/complete/search?client=firefox&ds=yt&q=${encodeURIComponent(query)}`
+        );
+        const data = await response.json();
+        setSuggestions(data[1]?.slice(0, 8) || []);
+      } catch (error) {
+        console.error('Error fetching suggestions:', error);
+        setSuggestions([]);
+      }
+    };
+
+    const timer = setTimeout(fetchSuggestions, 200);
+    return () => clearTimeout(timer);
+  }, [query]);
 
   const loadRecentSearches = async () => {
     if (!currentUser) return;
@@ -153,7 +178,25 @@ export default function SearchPage() {
             className="pl-12 py-6 text-base bg-card border-border rounded-xl" 
           />
           
-          {showSuggestions && !results.length && recentSearches.length > 0 && (
+          {/* Google Suggestions */}
+          {showSuggestions && query.trim() && suggestions.length > 0 && !results.length && (
+            <Card className="absolute z-10 w-full mt-2 p-2 bg-card border-border animate-fade-in">
+              <div className="px-3 py-2 text-xs text-muted-foreground font-semibold">Suggestions</div>
+              {suggestions.map((suggestion, i) => (
+                <div 
+                  key={i} 
+                  onClick={() => { setQuery(suggestion); handleSearch(suggestion); }} 
+                  className="flex items-center gap-3 px-3 py-2 hover:bg-muted rounded-lg cursor-pointer transition-colors"
+                >
+                  <Search className="w-4 h-4 text-muted-foreground" />
+                  <span className="text-sm">{suggestion}</span>
+                </div>
+              ))}
+            </Card>
+          )}
+          
+          {/* Recent Searches */}
+          {showSuggestions && !query.trim() && recentSearches.length > 0 && !results.length && (
             <Card className="absolute z-10 w-full mt-2 p-2 bg-card border-border animate-fade-in">
               <div className="px-3 py-2 text-xs text-muted-foreground font-semibold">Recent Searches</div>
               {recentSearches.map((search, i) => (

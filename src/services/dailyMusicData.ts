@@ -97,30 +97,34 @@ async function fetchFromGemini(prompt: string): Promise<any> {
   }
 }
 
-// Get thumbnail from YouTube
+// Get thumbnail from YouTube with Google fallback
 async function getThumbnail(title: string, artist: string): Promise<{ thumbnail: string; id: string; duration?: number }> {
+  let thumbnail = '';
+  let id = `${title}-${artist}`.replace(/\s+/g, '-').toLowerCase();
+  let duration: number | undefined;
+  
   try {
     const results = await searchYouTube(`${title} ${artist}`, 1);
     if (results.length > 0) {
-      return {
-        thumbnail: results[0].thumbnail,
-        id: results[0].id,
-        duration: results[0].duration
-      };
+      thumbnail = results[0].thumbnail;
+      id = results[0].id;
+      duration = results[0].duration;
     }
   } catch (error) {
-    console.error('Error fetching thumbnail:', error);
+    console.error('Error fetching thumbnail from YouTube:', error);
   }
   
-  return {
-    thumbnail: 'https://via.placeholder.com/300x300?text=No+Image',
-    id: `${title}-${artist}`.replace(/\s+/g, '-').toLowerCase()
-  };
+  // Fallback to Google/Unsplash if YouTube fails
+  if (!thumbnail) {
+    thumbnail = await getGoogleImage(`${title} ${artist} song music`);
+  }
+  
+  return { thumbnail, id, duration };
 }
 
 // Fetch Top Trending
 export async function fetchTopTrending(): Promise<Song[]> {
-  const prompt = 'Provide JSON array of top 15 trending songs globally today. Each entry must have: {"title": "song name", "artist": "artist name"}. Exclude ads, remixes, duplicates. Only music tracks over 1 minute. Respond ONLY with JSON array.';
+  const prompt = 'Provide JSON array of top 15 trending songs globally on Spotify right now. Each entry must have: {"rank": 1, "title": "song name", "artist": "artist name"}. Exclude ads, remixes, duplicates. Only popular music tracks. Respond ONLY with JSON array.';
   
   let data = await fetchFromGroq(prompt);
   if (!data) data = await fetchFromGemini(prompt);
@@ -197,31 +201,47 @@ export async function fetchRegionalHits(): Promise<Song[]> {
   return songs;
 }
 
-// Fetch Famous Artists
+// Get image from Google as fallback
+async function getGoogleImage(query: string): Promise<string> {
+  try {
+    // Use a simple approach - construct Google Images search URL
+    const searchQuery = encodeURIComponent(query);
+    return `https://source.unsplash.com/400x400/?${searchQuery}`;
+  } catch (error) {
+    console.error('Error fetching Google image:', error);
+    return 'https://via.placeholder.com/400x400?text=No+Image';
+  }
+}
+
+// Fetch Famous Artists (Top 15 Spotify Artists by Ranking)
 export async function fetchFamousArtists(): Promise<Artist[]> {
-  const prompt = 'Provide JSON array of 20 famous music artists globally. Each entry: {"name": "artist name"}. Include diverse genres. Respond ONLY with JSON array.';
+  const prompt = 'Provide JSON array of top 15 most popular artists on Spotify right now, ranked by streams and popularity (rank 1 to 15). Each entry: {"rank": 1, "name": "artist name"}. Include diverse genres like pop, hip-hop, rock, indie, etc. Respond ONLY with JSON array.';
   
   let data = await fetchFromGroq(prompt);
   if (!data) data = await fetchFromGemini(prompt);
   if (!data) return [];
 
   const artists: Artist[] = [];
-  for (const item of data.slice(0, 20)) {
+  for (const item of data.slice(0, 15)) {
     if (item.name) {
+      let image = '';
       try {
-        const results = await searchYouTube(`${item.name} artist`, 1);
-        artists.push({
-          id: item.name.replace(/\s+/g, '-').toLowerCase(),
-          name: item.name,
-          image: results[0]?.thumbnail || 'https://via.placeholder.com/150x150?text=Artist'
-        });
-      } catch {
-        artists.push({
-          id: item.name.replace(/\s+/g, '-').toLowerCase(),
-          name: item.name,
-          image: 'https://via.placeholder.com/150x150?text=Artist'
-        });
+        const results = await searchYouTube(`${item.name} artist official`, 1);
+        image = results[0]?.thumbnail || '';
+      } catch (error) {
+        console.error('YouTube fetch failed for artist:', item.name);
       }
+      
+      // Fallback to Google/Unsplash if YouTube fails
+      if (!image) {
+        image = await getGoogleImage(`${item.name} artist music`);
+      }
+      
+      artists.push({
+        id: item.name.replace(/\s+/g, '-').toLowerCase(),
+        name: item.name,
+        image
+      });
     }
   }
   
