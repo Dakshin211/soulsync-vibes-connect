@@ -3,10 +3,19 @@ import { Play } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { useMusicPlayer } from '@/contexts/MusicPlayerContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { getTrendingSongs, getArtistSongs, searchArtists, formatDuration, searchYouTube } from '@/services/youtubeApi';
+import { getArtistSongs, formatDuration } from '@/services/youtubeApi';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import LoadingSpinner from '@/components/LoadingSpinner';
+import { 
+  getCachedMusicData, 
+  storeMusicData, 
+  fetchTopTrending, 
+  fetchGlobalHits, 
+  fetchRegionalHits,
+  fetchFamousArtists,
+  refreshDailyMusicData
+} from '@/services/dailyMusicData';
 
 interface Song {
   id: string;
@@ -28,6 +37,7 @@ export default function Home() {
   const [trendingSongs, setTrendingSongs] = useState<Song[]>([]);
   const [recommendedSongs, setRecommendedSongs] = useState<Song[]>([]);
   const [globalHits, setGlobalHits] = useState<Song[]>([]);
+  const [regionalHits, setRegionalHits] = useState<Song[]>([]);
   const [famousArtists, setFamousArtists] = useState<Artist[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -36,13 +46,46 @@ export default function Home() {
       try {
         setLoading(true);
         
-        // Fetch trending songs
-        const trending = await getTrendingSongs(20);
+        // Check if we need to refresh daily data
+        const lastRefresh = localStorage.getItem('lastMusicDataRefresh');
+        const today = new Date().toDateString();
+        
+        if (!lastRefresh || lastRefresh !== today) {
+          await refreshDailyMusicData();
+          localStorage.setItem('lastMusicDataRefresh', today);
+        }
+        
+        // Fetch trending songs from cache or API
+        let trending = await getCachedMusicData('trending');
+        if (!trending) {
+          trending = await fetchTopTrending();
+          await storeMusicData('trending', trending);
+        }
         setTrendingSongs(trending);
         
-        // Fetch global hits
-        const hits = await searchYouTube('global hit songs 2024', 20);
+        // Fetch global hits from cache or API
+        let hits = await getCachedMusicData('globalHits');
+        if (!hits) {
+          hits = await fetchGlobalHits();
+          await storeMusicData('globalHits', hits);
+        }
         setGlobalHits(hits);
+        
+        // Fetch regional hits from cache or API
+        let regional = await getCachedMusicData('regionalHits');
+        if (!regional) {
+          regional = await fetchRegionalHits();
+          await storeMusicData('regionalHits', regional);
+        }
+        setRegionalHits(regional);
+        
+        // Fetch famous artists from cache or API
+        let artists = await getCachedMusicData('famousArtists');
+        if (!artists) {
+          artists = await fetchFamousArtists();
+          await storeMusicData('famousArtists', artists);
+        }
+        setFamousArtists(artists);
         
         // Get user's favorite artists for recommendations
         if (currentUser) {
@@ -58,10 +101,6 @@ export default function Home() {
             setRecommendedSongs(recommended.slice(0, 20));
           }
         }
-        
-        // Fetch famous artists
-        const artists = await searchArtists('popular music artists');
-        setFamousArtists(artists);
       } catch (error) {
         console.error('Error fetching content:', error);
       } finally {
@@ -179,6 +218,20 @@ export default function Home() {
               key={song.id}
               song={song}
               onClick={() => handlePlaySong(song, globalHits)}
+            />
+          ))}
+        </div>
+      </section>
+
+      {/* Regional Hits Section */}
+      <section className="mb-8">
+        <h2 className="text-xl font-bold mb-3">Regional Hits (India)</h2>
+        <div className="flex gap-3 overflow-x-auto pb-4 scrollbar-hide">
+          {regionalHits.slice(0, 10).map((song) => (
+            <SongCard 
+              key={song.id}
+              song={song}
+              onClick={() => handlePlaySong(song, regionalHits)}
             />
           ))}
         </div>

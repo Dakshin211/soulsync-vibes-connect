@@ -111,11 +111,9 @@ export default function SearchPage() {
       clearTimeout(debounceTimerRef.current);
     }
     
-    // Debounce search by 300ms
+    // Only search when user stops typing (no debounce, just wait for pause)
     if (value.trim()) {
-      debounceTimerRef.current = setTimeout(() => {
-        handleSearch(value);
-      }, 300);
+      setResults([]); // Clear immediately to show user is typing
     } else {
       setResults([]);
     }
@@ -133,11 +131,22 @@ export default function SearchPage() {
           Search
         </h1>
         
-        <form onSubmit={(e) => { e.preventDefault(); handleSearch(query); }} className="relative mb-6">
+        <form 
+          onSubmit={(e) => { 
+            e.preventDefault(); 
+            handleSearch(query); 
+          }} 
+          className="relative mb-6"
+        >
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground w-5 h-5" />
           <Input 
             value={query} 
-            onChange={(e) => handleQueryChange(e.target.value)} 
+            onChange={(e) => handleQueryChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                handleSearch(query);
+              }
+            }}
             onFocus={() => setShowSuggestions(true)} 
             onBlur={() => setTimeout(() => setShowSuggestions(false), 200)} 
             placeholder="Search songs, artists..." 
