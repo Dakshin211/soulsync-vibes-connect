@@ -213,40 +213,107 @@ async function getGoogleImage(query: string): Promise<string> {
   }
 }
 
+
+// Personalized Recommendations: Based on user's favorite artists
+export async function fetchRecommendedForUser(userId: string): Promise<Song[]> {
+  try {
+    // Step 1: Get favorite artists from Firebase
+    const userRef = doc(db, 'Users', userId);
+    const userSnap = await getDoc(userRef);
+
+    if (!userSnap.exists()) {
+      console.warn(`⚠️ No user found for ID: ${userId}`);
+      return [];
+    }
+
+    const favoriteArtists: string[] = userSnap.data().favoriteArtists || [];
+    if (!favoriteArtists || favoriteArtists.length === 0) {
+      console.warn(`⚠️ No favorite artists found for user ${userId}`);
+      return [];
+    }
+
+    // Step 2: Use Groq to get 10 song recommendations
+    const prompt = `
+      Based on favorite artists: ${favoriteArtists.join(', ')}.
+      Suggest 10 songs that this user is likely to enjoy.
+      Only include new or popular songs that match these artists' styles.
+      Respond with a valid JSON array like:
+      [{"title":"Song Name","artist":"Artist Name"}]
+    `;
+
+    let data = await fetchFromGroq(prompt);
+    if (!data) data = await fetchFromGemini(prompt);
+    if (!data) return [];
+
+    // Step 3: Enrich each with thumbnail
+    const songs: Song[] = [];
+    for (let i = 0; i < Math.min(data.length, 10); i++) {
+      const item = data[i];
+      if (item.title && item.artist) {
+        const { thumbnail, id, duration } = await getThumbnail(item.title, item.artist);
+        songs.push({
+          id,
+          title: item.title,
+          artist: item.artist,
+          thumbnail,
+          duration,
+        });
+      }
+    }
+
+    return songs;
+  } catch (error) {
+    console.error('Error fetching personalized recommendations:', error);
+    return [];
+  }
+}
+
 // Fetch Famous Artists (Top 15 Spotify Artists by Ranking)
+
 export async function fetchFamousArtists(): Promise<Artist[]> {
-  const prompt = 'Provide JSON array of top 15 most popular artists on Spotify right now, ranked by streams and popularity (rank 1 to 15). Each entry: {"rank": 1, "name": "artist name"}. Include diverse genres like pop, hip-hop, rock, indie, etc. Respond ONLY with JSON array.';
-  
-  let data = await fetchFromGroq(prompt);
-  if (!data) data = await fetchFromGemini(prompt);
-  if (!data) return [];
+  const staticArtists = [
+    { rank: 1, name: "The Weeknd" },
+    { rank: 2, name: "Bruno Mars" },
+    { rank: 3, name: "Taylor Swift" },
+    { rank: 4, name: "Rihanna" },
+    { rank: 5, name: "Lady Gaga" },
+    { rank: 6, name: "Justin Bieber" },
+    { rank: 7, name: "Billie Eilish" },
+    { rank: 8, name: "Ed Sheeran" },
+    { rank: 9, name: "Coldplay" },
+    { rank: 10, name: "Ariana Grande" },
+    { rank: 11, name: "Bad Bunny" },
+    { rank: 12, name: "Drake" },
+    { rank: 13, name: "David Guetta" },
+    { rank: 14, name: "Sabrina Carpenter" },
+    { rank: 15, name: "Kendrick Lamar" },
+  ];
 
   const artists: Artist[] = [];
-  for (const item of data.slice(0, 15)) {
-    if (item.name) {
-      let image = '';
-      try {
-        const results = await searchYouTube(`${item.name} artist official`, 1);
-        image = results[0]?.thumbnail || '';
-      } catch (error) {
-        console.error('YouTube fetch failed for artist:', item.name);
-      }
-      
-      // Fallback to Google/Unsplash if YouTube fails
-      if (!image) {
-        image = await getGoogleImage(`${item.name} artist music`);
-      }
-      
-      artists.push({
-        id: item.name.replace(/\s+/g, '-').toLowerCase(),
-        name: item.name,
-        image
-      });
+  for (const item of staticArtists) {
+    let image = '';
+    try {
+      const results = await searchYouTube(`${item.name} artist official`, 1);
+      image = results[0]?.thumbnail || '';
+    } catch (error) {
+      console.error('YouTube fetch failed for artist:', item.name);
     }
+
+    // Fallback image if YouTube fails
+    if (!image) {
+      image = await getGoogleImage(`${item.name} music artist`);
+    }
+
+    artists.push({
+      id: item.name.replace(/\s+/g, '-').toLowerCase(),
+      name: item.name,
+      image,
+    });
   }
-  
+
   return artists;
 }
+
 
 // Check if data is from today
 function isToday(timestamp: number): boolean {
