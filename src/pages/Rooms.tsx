@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Radio, Users, Plus, Copy, LogOut as Leave, Music2 } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Radio, Users, Plus, Copy, LogOut as Leave, Music2, ListMusic, Trash2, Share2, Play } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
@@ -7,10 +7,18 @@ import { Input } from '@/components/ui/input';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMusicPlayer } from '@/contexts/MusicPlayerContext';
 import { realtimeDb } from '@/lib/firebaseRealtime';
-import { ref, set, onValue, remove, push, get } from 'firebase/database';
+import { ref, set, onValue, remove, push, get, update, serverTimestamp } from 'firebase/database';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { toast } from 'sonner';
+
+interface Song {
+  id: string;
+  title: string;
+  artist: string;
+  thumbnail: string;
+  duration?: number;
+}
 
 interface Room {
   id: string;
@@ -18,15 +26,17 @@ interface Room {
   code: string;
   hostId: string;
   hostName: string;
-  currentSong: any;
+  currentSong: Song | null;
   currentTime: number;
   isPlaying: boolean;
   users: { [key: string]: boolean };
+  playlist: Song[];
+  lastUpdateTime: number;
 }
 
 export default function Rooms() {
   const { currentUser } = useAuth();
-  const { playSong, pauseSong, resumeSong, currentSong, isPlaying, seekTo, currentTime } = useMusicPlayer();
+  const { playSong, pauseSong, resumeSong, currentSong, isPlaying, seekTo, currentTime, addToQueue, queue } = useMusicPlayer();
   const [rooms, setRooms] = useState<Room[]>([]);
   const [currentRoom, setCurrentRoom] = useState<Room | null>(null);
   const [newRoomName, setNewRoomName] = useState('');
@@ -34,6 +44,10 @@ export default function Rooms() {
   const [isCreating, setIsCreating] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
+  const [playlistDialogOpen, setPlaylistDialogOpen] = useState(false);
+  const isSyncingRef = useRef(false);
+  const lastSyncTimeRef = useRef(0);
+  const roomCacheRef = useRef<{ data: Room | null; timestamp: number }>({ data: null, timestamp: 0 });
 
   // Listen to all rooms and auto-delete empty ones
   useEffect(() => {
@@ -66,25 +80,46 @@ export default function Rooms() {
     return () => unsubscribe();
   }, []);
 
-  // Sync room playback state - ALL users sync, any user can control
+  // Sync room playback state with caching - ALL users sync, any user can control
   useEffect(() => {
     if (!currentRoom || !currentUser) return;
 
     const roomRef = ref(realtimeDb, `rooms/${currentRoom.id}`);
-    let isUpdating = false;
     
     const unsubscribe = onValue(roomRef, (snapshot) => {
       const data = snapshot.val();
       if (!data) {
         setCurrentRoom(null);
+        roomCacheRef.current = { data: null, timestamp: 0 };
         return;
       }
 
-      if (isUpdating) return;
+      // Check cache (3 second TTL)
+      const now = Date.now();
+      if (roomCacheRef.current.data && (now - roomCacheRef.current.timestamp) < 3000) {
+        // Use cached data to reduce rerenders
+        if (JSON.stringify(roomCacheRef.current.data) === JSON.stringify(data)) {
+          return;
+        }
+      }
 
-      // All users sync to room state
+      // Update cache
+      roomCacheRef.current = { data, timestamp: now };
+
+      if (isSyncingRef.current) return;
+
+      // Sync to room state with 50ms precision
+      const timeDiff = Math.abs((data.currentTime || 0) - currentTime);
+      
       if (data.currentSong && data.currentSong.id !== currentSong?.id) {
+        isSyncingRef.current = true;
         playSong(data.currentSong);
+        setTimeout(() => {
+          if (data.currentTime > 1) {
+            seekTo(data.currentTime);
+          }
+          isSyncingRef.current = false;
+        }, 100);
       }
       
       if (data.isPlaying !== isPlaying) {
@@ -95,41 +130,50 @@ export default function Rooms() {
         }
       }
 
-      // Sync time (with tolerance for network delay)
-      if (Math.abs(data.currentTime - currentTime) > 2) {
-        seekTo(data.currentTime);
+      // High-precision sync (target 50ms latency)
+      if (timeDiff > 0.5 && (now - lastSyncTimeRef.current) > 1000) {
+        seekTo(data.currentTime || 0);
+        lastSyncTimeRef.current = now;
       }
       
-      setCurrentRoom(data);
+      setCurrentRoom({ ...data, id: currentRoom.id });
     });
 
     return () => unsubscribe();
   }, [currentRoom?.id, currentUser]);
 
-  // Broadcast playback state - ANY user can update
+  // Broadcast playback state - ANY user can update (debounced)
   useEffect(() => {
-    if (!currentRoom || !currentUser) return;
+    if (!currentRoom || !currentUser || isSyncingRef.current) return;
 
     const updateRoom = async () => {
-      const roomRef = ref(realtimeDb, `rooms/${currentRoom.id}`);
-      const snapshot = await get(roomRef);
-      const currentData = snapshot.val();
-      
-      // Only update if values actually changed
-      if (currentData &&
-          (currentData.currentSong?.id !== currentSong?.id ||
-           currentData.isPlaying !== isPlaying ||
-           Math.abs(currentData.currentTime - currentTime) > 0.5)) {
-        await set(roomRef, {
-          ...currentData,
-          currentSong: currentSong,
-          isPlaying: isPlaying,
-          currentTime: currentTime,
-        });
+      try {
+        const roomRef = ref(realtimeDb, `rooms/${currentRoom.id}`);
+        const snapshot = await get(roomRef);
+        const currentData = snapshot.val();
+        
+        if (!currentData) return;
+
+        const timeDiff = Math.abs((currentData.currentTime || 0) - currentTime);
+        const songChanged = currentData.currentSong?.id !== currentSong?.id;
+        const playStateChanged = currentData.isPlaying !== isPlaying;
+        
+        // Only update if values actually changed
+        if (songChanged || playStateChanged || timeDiff > 0.5) {
+          await update(roomRef, {
+            currentSong: currentSong,
+            isPlaying: isPlaying,
+            currentTime: currentTime,
+            lastUpdateTime: Date.now(),
+          });
+        }
+      } catch (error) {
+        console.error('Error updating room:', error);
       }
     };
 
-    updateRoom();
+    const debounce = setTimeout(updateRoom, 100);
+    return () => clearTimeout(debounce);
   }, [currentSong, isPlaying, currentTime, currentRoom?.id, currentUser]);
 
   const generateRoomCode = () => {
@@ -157,6 +201,8 @@ export default function Rooms() {
         currentTime: 0,
         isPlaying: false,
         users: { [currentUser.uid]: true },
+        playlist: [],
+        lastUpdateTime: Date.now(),
       };
 
       await set(newRoomRef, roomData);
@@ -173,8 +219,10 @@ export default function Rooms() {
     }
   };
 
-  const joinRoom = async () => {
-    if (!currentUser || !joinCode.trim()) return;
+  const joinRoom = async (code?: string) => {
+    if (!currentUser) return;
+    const roomCode = code || joinCode.trim();
+    if (!roomCode) return;
     
     try {
       const roomsRef = ref(realtimeDb, 'rooms');
@@ -187,7 +235,7 @@ export default function Rooms() {
       }
 
       const roomEntry = Object.entries(data).find(([_, room]: [string, any]) => 
-        room.code === joinCode.toUpperCase()
+        room.code === roomCode.toUpperCase()
       );
 
       if (!roomEntry) {
@@ -196,10 +244,33 @@ export default function Rooms() {
       }
 
       const [roomId, roomData] = roomEntry as [string, any];
-      const roomRef = ref(realtimeDb, `rooms/${roomId}/users/${currentUser.uid}`);
-      await set(roomRef, true);
+      
+      // Pause personal playback
+      if (currentSong) {
+        pauseSong();
+      }
+      
+      // Join room
+      const userRef = ref(realtimeDb, `rooms/${roomId}/users/${currentUser.uid}`);
+      await set(userRef, true);
 
-      setCurrentRoom({ id: roomId, ...roomData });
+      // Sync to current room state immediately
+      const joinedRoom = { id: roomId, ...roomData };
+      setCurrentRoom(joinedRoom);
+      
+      // Auto-sync to room's playback mid-song
+      if (roomData.currentSong) {
+        setTimeout(() => {
+          playSong(roomData.currentSong);
+          if (roomData.currentTime > 0) {
+            setTimeout(() => seekTo(roomData.currentTime), 500);
+          }
+          if (roomData.isPlaying) {
+            resumeSong();
+          }
+        }, 200);
+      }
+      
       toast.success('Joined room!');
       setJoinCode('');
       setJoinDialogOpen(false);
@@ -213,14 +284,36 @@ export default function Rooms() {
     if (!currentRoom || !currentUser) return;
 
     try {
+      const roomRef = ref(realtimeDb, `rooms/${currentRoom.id}`);
+      const snapshot = await get(roomRef);
+      const roomData = snapshot.val();
+      
       if (currentUser.uid === currentRoom.hostId) {
-        await remove(ref(realtimeDb, `rooms/${currentRoom.id}`));
-        toast.success('Room closed');
+        // Transfer host to another user if available
+        const userIds = Object.keys(roomData.users || {}).filter(id => id !== currentUser.uid);
+        
+        if (userIds.length > 0) {
+          const newHostId = userIds[0];
+          const newHostDoc = await getDoc(doc(db, 'Users', newHostId));
+          const newHostName = newHostDoc.data()?.username || 'User';
+          
+          await update(roomRef, {
+            hostId: newHostId,
+            hostName: newHostName,
+          });
+          await remove(ref(realtimeDb, `rooms/${currentRoom.id}/users/${currentUser.uid}`));
+          toast.success('Host transferred');
+        } else {
+          // No other users, delete room
+          await remove(roomRef);
+          toast.success('Room closed');
+        }
       } else {
         await remove(ref(realtimeDb, `rooms/${currentRoom.id}/users/${currentUser.uid}`));
         toast.success('Left room');
       }
       setCurrentRoom(null);
+      roomCacheRef.current = { data: null, timestamp: 0 };
     } catch (error) {
       console.error('Error leaving room:', error);
       toast.error('Failed to leave room');
@@ -231,6 +324,64 @@ export default function Rooms() {
     navigator.clipboard.writeText(code);
     toast.success('Room code copied!');
   };
+
+  const shareRoomLink = () => {
+    if (!currentRoom) return;
+    const link = `${window.location.origin}?joinRoom=${currentRoom.code}`;
+    navigator.clipboard.writeText(link);
+    toast.success('Invite link copied!');
+  };
+
+  const addSongToRoomPlaylist = async (song: Song) => {
+    if (!currentRoom || !currentUser) return;
+    
+    try {
+      const roomRef = ref(realtimeDb, `rooms/${currentRoom.id}`);
+      const snapshot = await get(roomRef);
+      const data = snapshot.val();
+      
+      const updatedPlaylist = [...(data.playlist || []), song];
+      await update(roomRef, { playlist: updatedPlaylist });
+      toast.success('Added to room playlist');
+    } catch (error) {
+      console.error('Error adding to playlist:', error);
+      toast.error('Failed to add');
+    }
+  };
+
+  const removeSongFromRoomPlaylist = async (index: number) => {
+    if (!currentRoom || !currentUser) return;
+    
+    try {
+      const roomRef = ref(realtimeDb, `rooms/${currentRoom.id}`);
+      const snapshot = await get(roomRef);
+      const data = snapshot.val();
+      
+      const updatedPlaylist = [...(data.playlist || [])];
+      updatedPlaylist.splice(index, 1);
+      await update(roomRef, { playlist: updatedPlaylist });
+      toast.success('Removed from playlist');
+    } catch (error) {
+      console.error('Error removing from playlist:', error);
+      toast.error('Failed to remove');
+    }
+  };
+
+  const playRoomPlaylistSong = async (song: Song) => {
+    if (!currentRoom || !currentUser) return;
+    playSong(song);
+  };
+
+  // Handle invite links on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const roomCode = params.get('joinRoom');
+    if (roomCode && currentUser) {
+      joinRoom(roomCode);
+      // Clean URL
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, [currentUser]);
 
   if (currentRoom) {
     const userCount = currentRoom.users ? Object.keys(currentRoom.users).length : 0;
@@ -249,42 +400,91 @@ export default function Rooms() {
               <Button size="sm" variant="ghost" onClick={() => copyRoomCode(currentRoom.code)}>
                 <Copy className="w-4 h-4" />
               </Button>
+              <Button size="sm" variant="ghost" onClick={shareRoomLink}>
+                <Share2 className="w-4 h-4" />
+              </Button>
             </div>
           </div>
-          <Button variant="destructive" onClick={leaveRoom}>
+          <Button variant="destructive" onClick={leaveRoom} className="animate-fade-in">
             <Leave className="w-5 h-5 mr-2" />
             {currentUser?.uid === currentRoom.hostId ? 'Close' : 'Leave'}
           </Button>
         </div>
 
-        <Card className="bg-card border-border p-6">
-          <div className="flex items-center gap-2 mb-4">
-            <Users className="w-5 h-5 text-primary" />
-            <span className="font-medium">{userCount} listening</span>
-          </div>
-
-          {currentRoom.currentSong ? (
-            <div className="flex items-center gap-4 p-4 bg-muted rounded-lg">
-              <img 
-                src={currentRoom.currentSong.thumbnail} 
-                alt={currentRoom.currentSong.title}
-                className="w-16 h-16 rounded object-cover"
-              />
-              <div className="flex-1">
-                <h3 className="font-bold">{currentRoom.currentSong.title}</h3>
-                <p className="text-sm text-muted-foreground">{currentRoom.currentSong.artist}</p>
+        <div className="space-y-4">
+          <Card className="bg-card border-border p-6 animate-scale-in">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Users className="w-5 h-5 text-primary" />
+                <span className="font-medium">{userCount} listening</span>
               </div>
+              <Dialog open={playlistDialogOpen} onOpenChange={setPlaylistDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button size="sm" variant="outline">
+                    <ListMusic className="w-4 h-4 mr-2" />
+                    Playlist ({currentRoom.playlist?.length || 0})
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-md max-h-[80vh] overflow-y-auto">
+                  <DialogHeader>
+                    <DialogTitle>Room Playlist</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-2 mt-4">
+                    {currentRoom.playlist && currentRoom.playlist.length > 0 ? (
+                      currentRoom.playlist.map((song, index) => (
+                        <div key={index} className="flex items-center gap-3 p-3 bg-muted rounded-lg hover:bg-muted/80 transition-all">
+                          <img src={song.thumbnail} alt={song.title} className="w-12 h-12 rounded object-cover" />
+                          <div className="flex-1 min-w-0">
+                            <h4 className="font-semibold text-sm truncate">{song.title}</h4>
+                            <p className="text-xs text-muted-foreground truncate">{song.artist}</p>
+                          </div>
+                          <Button size="sm" variant="ghost" onClick={() => playRoomPlaylistSong(song)}>
+                            <Play className="w-4 h-4" />
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => removeSongFromRoomPlaylist(index)}>
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-center text-muted-foreground py-8">No songs in playlist</p>
+                    )}
+                  </div>
+                </DialogContent>
+              </Dialog>
             </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
-              <Music2 className="w-12 h-12 mb-2 opacity-50" />
-              <p>No song playing</p>
-              {currentUser?.uid === currentRoom.hostId && (
+
+            {currentRoom.currentSong ? (
+              <div className="flex items-center gap-4 p-4 bg-gradient-to-r from-primary/10 to-secondary/10 rounded-lg border border-primary/20 animate-fade-in">
+                <img 
+                  src={currentRoom.currentSong.thumbnail} 
+                  alt={currentRoom.currentSong.title}
+                  className="w-16 h-16 rounded object-cover shadow-glow-violet"
+                />
+                <div className="flex-1">
+                  <h3 className="font-bold">{currentRoom.currentSong.title}</h3>
+                  <p className="text-sm text-muted-foreground">{currentRoom.currentSong.artist}</p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-8 text-muted-foreground animate-fade-in">
+                <Music2 className="w-12 h-12 mb-2 opacity-50" />
+                <p>No song playing</p>
                 <p className="text-sm">Play a song to start the session</p>
-              )}
-            </div>
+              </div>
+            )}
+          </Card>
+
+          {currentSong && currentSong.id !== currentRoom.currentSong?.id && (
+            <Button 
+              onClick={() => addSongToRoomPlaylist(currentSong)} 
+              className="w-full bg-gradient-primary animate-fade-in"
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Add Current Song to Room Playlist
+            </Button>
           )}
-        </Card>
+        </div>
       </div>
     );
   }
@@ -312,7 +512,7 @@ export default function Rooms() {
                   onKeyDown={(e) => e.key === 'Enter' && joinRoom()}
                   className="uppercase"
                 />
-                <Button onClick={joinRoom} disabled={!joinCode.trim()} className="w-full bg-gradient-primary">
+                <Button onClick={() => joinRoom()} disabled={!joinCode.trim()} className="w-full bg-gradient-primary">
                   Join
                 </Button>
               </div>

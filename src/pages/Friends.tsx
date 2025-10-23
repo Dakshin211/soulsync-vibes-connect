@@ -1,16 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { UserPlus, Check, X, Users as UsersIcon, Music2 } from 'lucide-react';
+import { UserPlus, Check, X, Users as UsersIcon, Music2, Headphones } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
 import { useAuth } from '@/contexts/AuthContext';
 import { db } from '@/lib/firebase';
+import { realtimeDb } from '@/lib/firebaseRealtime';
 import { 
   collection, addDoc, getDocs, deleteDoc, doc, query, 
   where, updateDoc, onSnapshot, getDoc 
 } from 'firebase/firestore';
+import { ref, onValue, set, onDisconnect, serverTimestamp } from 'firebase/database';
 import { toast } from 'sonner';
 
 interface Friend {
@@ -21,6 +24,11 @@ interface Friend {
   status: 'pending' | 'accepted';
   requestedBy: string;
   createdAt: any;
+  isOnline?: boolean;
+  currentSong?: {
+    title: string;
+    artist: string;
+  } | null;
 }
 
 export default function Friends() {
@@ -30,7 +38,40 @@ export default function Friends() {
   const [searchEmail, setSearchEmail] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [onlineStatus, setOnlineStatus] = useState<{ [key: string]: boolean }>({});
+  const [listeningStatus, setListeningStatus] = useState<{ [key: string]: any }>({});
 
+  // Set up presence system for current user
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const userPresenceRef = ref(realtimeDb, `presence/${currentUser.uid}`);
+    const userStatusRef = ref(realtimeDb, `status/${currentUser.uid}`);
+
+    // Set online status
+    set(userPresenceRef, {
+      online: true,
+      lastSeen: serverTimestamp(),
+    });
+
+    // Set up disconnect handler
+    onDisconnect(userPresenceRef).set({
+      online: false,
+      lastSeen: serverTimestamp(),
+    });
+
+    // Also cleanup status on disconnect
+    onDisconnect(userStatusRef).remove();
+
+    return () => {
+      set(userPresenceRef, {
+        online: false,
+        lastSeen: serverTimestamp(),
+      });
+    };
+  }, [currentUser]);
+
+  // Fetch friends list
   useEffect(() => {
     if (!currentUser) return;
 
@@ -62,8 +103,30 @@ export default function Friends() {
         })
       );
 
-      setFriends(data.filter(f => f.status === 'accepted'));
+      const acceptedFriends = data.filter(f => f.status === 'accepted');
+      setFriends(acceptedFriends);
       setRequests(data.filter(f => f.status === 'pending' && f.requestedBy !== currentUser.uid));
+
+      // Listen to presence for each friend
+      acceptedFriends.forEach((friend) => {
+        const presenceRef = ref(realtimeDb, `presence/${friend.friendId}`);
+        onValue(presenceRef, (snapshot) => {
+          const presenceData = snapshot.val();
+          setOnlineStatus(prev => ({
+            ...prev,
+            [friend.friendId]: presenceData?.online || false,
+          }));
+        });
+
+        const statusRef = ref(realtimeDb, `status/${friend.friendId}`);
+        onValue(statusRef, (snapshot) => {
+          const statusData = snapshot.val();
+          setListeningStatus(prev => ({
+            ...prev,
+            [friend.friendId]: statusData?.currentSong || null,
+          }));
+        });
+      });
     });
 
     return () => unsubscribe();
@@ -255,31 +318,64 @@ export default function Friends() {
       <h2 className="text-xl font-bold mb-4">All Friends</h2>
       
       {friends.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+        <div className="flex flex-col items-center justify-center py-16 text-muted-foreground animate-fade-in">
           <UsersIcon className="w-16 h-16 mb-4 opacity-50" />
           <p className="text-lg">No friends yet</p>
           <p className="text-sm">Add friends to listen together</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {friends.map((friend) => (
-            <Card key={friend.id} className="bg-card border-border p-4 hover:shadow-glow-pink transition-all">
-              <div className="flex items-center gap-3">
-                <Avatar className="w-12 h-12">
-                  <AvatarFallback className="bg-gradient-primary text-white">
-                    {friend.username.charAt(0).toUpperCase()}
-                  </AvatarFallback>
-                </Avatar>
-                <div className="flex-1">
-                  <h3 className="font-bold">{friend.username}</h3>
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <div className="w-2 h-2 rounded-full bg-green-500" />
-                    <span>Online</span>
+          {friends.map((friend) => {
+            const isOnline = onlineStatus[friend.friendId];
+            const currentSong = listeningStatus[friend.friendId];
+            
+            return (
+              <Card 
+                key={friend.id} 
+                className="bg-card border-border p-4 hover:shadow-glow-pink transition-all animate-fade-in"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="relative">
+                    <Avatar className="w-12 h-12">
+                      <AvatarFallback className="bg-gradient-primary text-white">
+                        {friend.username.charAt(0).toUpperCase()}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div 
+                      className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-card ${
+                        isOnline ? 'bg-green-500' : 'bg-gray-400'
+                      }`}
+                    />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-bold">{friend.username}</h3>
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      {isOnline ? (
+                        currentSong ? (
+                          <>
+                            <Headphones className="w-3 h-3 text-primary animate-pulse" />
+                            <span className="truncate">
+                              {currentSong.title} - {currentSong.artist}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                            <span>Online</span>
+                          </>
+                        )
+                      ) : (
+                        <>
+                          <div className="w-2 h-2 rounded-full bg-gray-400" />
+                          <span>Offline</span>
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            </Card>
-          ))}
+              </Card>
+            );
+          })}
         </div>
       )}
     </div>

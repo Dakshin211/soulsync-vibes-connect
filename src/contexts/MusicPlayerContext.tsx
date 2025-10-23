@@ -2,6 +2,9 @@ import React, { createContext, useContext, useState, useRef, useCallback, useEff
 import { getSimilarTracks, getRandomRecommendation } from '@/services/recommendationApi';
 import { searchYouTube } from '@/services/youtubeApi';
 import { getGroqRecommendations } from '@/services/groqApi';
+import { auth } from '@/lib/firebase';
+import { realtimeDb } from '@/lib/firebaseRealtime';
+import { ref, set, onDisconnect } from 'firebase/database';
 
 interface Song {
   id: string;
@@ -94,6 +97,21 @@ export const MusicPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const playSong = useCallback((song: Song) => {
     setCurrentSong(song);
     setIsPlaying(true);
+    
+    // Update listening status for friends
+    const user = auth.currentUser;
+    if (user) {
+      const statusRef = ref(realtimeDb, `status/${user.uid}`);
+      set(statusRef, {
+        currentSong: {
+          title: song.title,
+          artist: song.artist,
+        },
+        timestamp: Date.now(),
+      });
+      
+      onDisconnect(statusRef).remove();
+    }
   }, []);
 
   const pauseSong = useCallback(() => {
