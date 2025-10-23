@@ -212,40 +212,55 @@ export async function fetchRegionalHits(): Promise<Song[]> {
 }
 
 // 4️⃣ Famous Artists
+// 4️⃣ Famous Artists (Strict Fixed List, No Replacement)
 export async function fetchFamousArtists(): Promise<Artist[]> {
   const artistsList = [
     "The Weeknd",
-    "Bruno Mars",
+    "Drake",
     "Taylor Swift",
     "Lana Del Rey",
-    "Lady Gaga",
-    "Justin Bieber",
     "Billie Eilish",
-    "Ed Sheeran",
-    "Coldplay",
     "Ariana Grande",
-    "Bad Bunny",
-    "Drake",
-    "David Guetta",
-    "Sabrina Carpenter",
-    "Kendrick Lamar"
-];
+    "Justin Bieber",
+    "Post Malone",
+    "Olivia Rodrigo",
+    "Lil Nas X",
+    "Dua Lipa",
+    "Harry Styles",
+    "Doja Cat",
+    "Ed Sheeran",
+    "Bad Bunny"
+  ];
 
   const artists: Artist[] = [];
 
   for (const name of artistsList) {
     try {
-      const results = await searchYouTube(`${name} artist official`, 1);
-      const image = results[0]?.thumbnail || (await getGoogleImage(`${name} artist portrait`));
-      artists.push({ id: name.toLowerCase().replace(/\s+/g, '-'), name, image });
-    } catch {
+      const results = await searchYouTube(`${name} official artist`, 1);
+      const image =
+        results?.[0]?.thumbnail ||
+        (await getGoogleImage(`${name} artist portrait`));
+
+      // 🚫 Don’t use YouTube result name — always use our fixed `name`
+      artists.push({
+        id: name.toLowerCase().replace(/\s+/g, '-'),
+        name,
+        image,
+      });
+    } catch (err) {
+      console.error(`Error fetching image for ${name}:`, err);
       const image = await getGoogleImage(`${name} artist portrait`);
-      artists.push({ id: name.toLowerCase().replace(/\s+/g, '-'), name, image });
+      artists.push({
+        id: name.toLowerCase().replace(/\s+/g, '-'),
+        name,
+        image,
+      });
     }
   }
 
   return artists;
 }
+
 
 // 5️⃣ Recommended For User
 export async function fetchRecommendedForUser(userId: string): Promise<Song[]> {
