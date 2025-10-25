@@ -1,6 +1,4 @@
-// src/services/dailyMusicData.ts
 // Daily music data fetching using Groq (primary) and Gemini (fallback)
-
 import { collection, doc, setDoc, getDoc, deleteDoc, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { searchYouTube } from './youtubeApi';
@@ -23,7 +21,7 @@ interface Artist {
   image: string;
 }
 
-// -------------------- Helper: Groq Fetch --------------------
+// Fetch from Groq API
 async function fetchFromGroq(prompt: string): Promise<any> {
   try {
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -37,10 +35,12 @@ async function fetchFromGroq(prompt: string): Promise<any> {
         messages: [
           {
             role: 'system',
-            content:
-              'You are an expert music data analyst. Always return clean JSON array, no extra text, no markdown.',
+            content: 'You are a music data expert. Return only valid JSON array. No additional text.'
           },
-          { role: 'user', content: prompt },
+          {
+            role: 'user',
+            content: prompt
+          }
         ],
         temperature: 0.3,
       }),
@@ -50,7 +50,10 @@ async function fetchFromGroq(prompt: string): Promise<any> {
 
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content;
-    const jsonMatch = content?.match(/\[[\s\S]*\]/);
+    
+    if (!content) return null;
+
+    const jsonMatch = content.match(/\[[\s\S]*\]/);
     if (!jsonMatch) return null;
 
     return JSON.parse(jsonMatch[0]);
@@ -60,25 +63,31 @@ async function fetchFromGroq(prompt: string): Promise<any> {
   }
 }
 
-// -------------------- Helper: Gemini Fallback --------------------
+// Fetch from Gemini API (fallback)
 async function fetchFromGemini(prompt: string): Promise<any> {
   try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-        }),
-      }
-    );
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${GEMINI_API_KEY}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{
+            text: prompt
+          }]
+        }]
+      }),
+    });
 
     if (!response.ok) throw new Error('Gemini API error');
 
     const data = await response.json();
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    const jsonMatch = text?.match(/\[[\s\S]*\]/);
+    
+    if (!text) return null;
+
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
     if (!jsonMatch) return null;
 
     return JSON.parse(jsonMatch[0]);
@@ -88,247 +97,288 @@ async function fetchFromGemini(prompt: string): Promise<any> {
   }
 }
 
-// -------------------- Helper: Google/YouTube Thumbnails --------------------
+// Get thumbnail from YouTube with Google fallback
 async function getThumbnail(title: string, artist: string): Promise<{ thumbnail: string; id: string; duration?: number }> {
-  let id = `${title}-${artist}`.replace(/\s+/g, '-').toLowerCase();
   let thumbnail = '';
+  let id = `${title}-${artist}`.replace(/\s+/g, '-').toLowerCase();
   let duration: number | undefined;
-
+  
   try {
     const results = await searchYouTube(`${title} ${artist}`, 1);
-    if (results?.length > 0) {
+    if (results.length > 0) {
       thumbnail = results[0].thumbnail;
       id = results[0].id;
       duration = results[0].duration;
     }
   } catch (error) {
-    console.error('YouTube fetch error:', error);
+    console.error('Error fetching thumbnail from YouTube:', error);
   }
-
+  
+  // Fallback to Google/Unsplash if YouTube fails
   if (!thumbnail) {
-    thumbnail = await getGoogleImage(`${title} ${artist} music song`);
+    thumbnail = await getGoogleImage(`${title} ${artist} song music`);
   }
-
+  
   return { thumbnail, id, duration };
 }
 
-// Unsplash fallback for any missing images
-async function getGoogleImage(query: string): Promise<string> {
-  const safeQuery = encodeURIComponent(query);
-  return `https://source.unsplash.com/400x400/?${safeQuery},music`;
-}
-
-// -------------------- Data Fetchers --------------------
-
-// 1️⃣ Trending Songs
+// Fetch Top Trending
 export async function fetchTopTrending(): Promise<Song[]> {
-  const prompt = `
-  Provide a JSON array of top 15 currently trending songs globally on Spotify.
-  Each item: {"rank": 1, "title": "Song Name", "artist": "Artist Name"}.
-  Exclude remixes, ads, and duplicates.
-  Only return the JSON array, no text.
-  `;
-
+  const prompt = 'Provide JSON array of top 15 trending songs globally on Spotify right now. Each entry must have: {"rank": 1, "title": "song name", "artist": "artist name"}. Exclude ads, remixes, duplicates. Only popular music tracks. Respond ONLY with JSON array.';
+  
   let data = await fetchFromGroq(prompt);
   if (!data) data = await fetchFromGemini(prompt);
   if (!data) return [];
 
   const songs: Song[] = [];
-  const seen = new Set();
-
-  for (let i = 0; i < data.length && songs.length < 15; i++) {
+  for (let i = 0; i < Math.min(data.length, 15); i++) {
     const item = data[i];
-    const key = `${item.title}-${item.artist}`.toLowerCase();
-    if (item.title && item.artist && !seen.has(key)) {
-      seen.add(key);
+    if (item.title && item.artist) {
       const { thumbnail, id, duration } = await getThumbnail(item.title, item.artist);
-      if (thumbnail) {
-        songs.push({ id, title: item.title, artist: item.artist, thumbnail, duration, rank: songs.length + 1 });
-      }
+      songs.push({
+        id,
+        title: item.title,
+        artist: item.artist,
+        thumbnail,
+        duration,
+        rank: i + 1
+      });
     }
   }
-
+  
   return songs;
 }
 
-// 2️⃣ Global Hits
+// Fetch Global Hits (all-time most-streamed)
 export async function fetchGlobalHits(): Promise<Song[]> {
-  const prompt = `
-  Provide a JSON array of top 15 all-time most-streamed songs on Spotify.
-  Include artists like Ed Sheeran, The Weeknd, and Billie Eilish.
-  Each item: {"title":"Song Name","artist":"Artist Name"}.
-  Only JSON output.
-  `;
-
+  const prompt = 'Provide JSON array of top 15 all-time most-streamed songs on Spotify (like Shape of You, Blinding Lights, Someone You Loved). Each entry: {"title": "song name", "artist": "artist name"}. Respond ONLY with JSON array.';
+  
   let data = await fetchFromGroq(prompt);
   if (!data) data = await fetchFromGemini(prompt);
   if (!data) return [];
 
-  const seen = new Set();
   const songs: Song[] = [];
-
-  for (let i = 0; i < data.length && songs.length < 15; i++) {
+  for (let i = 0; i < Math.min(data.length, 15); i++) {
     const item = data[i];
-    const key = `${item.title}-${item.artist}`.toLowerCase();
-    if (item.title && item.artist && !seen.has(key)) {
-      seen.add(key);
+    if (item.title && item.artist) {
       const { thumbnail, id, duration } = await getThumbnail(item.title, item.artist);
-      if (thumbnail) {
-        songs.push({ id, title: item.title, artist: item.artist, thumbnail, duration });
-      }
+      songs.push({
+        id,
+        title: item.title,
+        artist: item.artist,
+        thumbnail,
+        duration
+      });
     }
   }
-
+  
   return songs;
 }
 
-// 3️⃣ Regional Hits (India + Tamil Nadu)
+// Fetch Regional Hits (India/Tamil Nadu)
 export async function fetchRegionalHits(): Promise<Song[]> {
-  const prompt = `
-  Provide a JSON array of top 15 trending songs in India and Tamil Nadu this week.
-  Include both Tamil and Hindi film songs.
-  Each item: {"title":"Song Name","artist":"Artist Name"}.
-  Only JSON output.
-  `;
-
+  const prompt = 'Provide JSON array of top 15 trending songs in India and Tamil Nadu right now. Include both Hindi and Tamil songs. Each entry: {"title": "song name", "artist": "artist name"}. Respond ONLY with JSON array.';
+  
   let data = await fetchFromGroq(prompt);
   if (!data) data = await fetchFromGemini(prompt);
   if (!data) return [];
 
   const songs: Song[] = [];
-  const seen = new Set();
-
-  for (let i = 0; i < data.length && songs.length < 15; i++) {
+  for (let i = 0; i < Math.min(data.length, 15); i++) {
     const item = data[i];
-    const key = `${item.title}-${item.artist}`.toLowerCase();
-    if (item.title && item.artist && !seen.has(key)) {
-      seen.add(key);
+    if (item.title && item.artist) {
       const { thumbnail, id, duration } = await getThumbnail(item.title, item.artist);
-      if (thumbnail) songs.push({ id, title: item.title, artist: item.artist, thumbnail, duration });
+      songs.push({
+        id,
+        title: item.title,
+        artist: item.artist,
+        thumbnail,
+        duration
+      });
     }
   }
-
+  
   return songs;
 }
 
-// 4️⃣ Famous Artists
-export async function fetchFamousArtists(): Promise<Artist[]> {
-  const artistsList = [
-    "The Weeknd",
-    "Bruno Mars",
-    "Taylor Swift",
-    "Lana Del Rey",
-    "Lady Gaga",
-    "Justin Bieber",
-    "Billie Eilish",
-    "Ed Sheeran",
-    "Coldplay",
-    "Ariana Grande",
-    "Bad Bunny",
-    "Drake",
-    "David Guetta",
-    "Sabrina Carpenter",
-    "Kendrick Lamar"
-];
-
-  const artists: Artist[] = [];
-
-  for (const name of artistsList) {
-    try {
-      const results = await searchYouTube(`${name} artist official`, 1);
-      const image = results[0]?.thumbnail || (await getGoogleImage(`${name} artist portrait`));
-      artists.push({ id: name.toLowerCase().replace(/\s+/g, '-'), name, image });
-    } catch {
-      const image = await getGoogleImage(`${name} artist portrait`);
-      artists.push({ id: name.toLowerCase().replace(/\s+/g, '-'), name, image });
-    }
+// Get image from Google as fallback
+async function getGoogleImage(query: string): Promise<string> {
+  try {
+    // Use a simple approach - construct Google Images search URL
+    const searchQuery = encodeURIComponent(query);
+    return `https://source.unsplash.com/400x400/?${searchQuery}`;
+  } catch (error) {
+    console.error('Error fetching Google image:', error);
+    return 'https://via.placeholder.com/400x400?text=No+Image';
   }
-
-  return artists;
 }
 
-// 5️⃣ Recommended For User
+
+// Personalized Recommendations: Based on user's favorite artists
 export async function fetchRecommendedForUser(userId: string): Promise<Song[]> {
   try {
+    // Step 1: Get favorite artists from Firebase
     const userRef = doc(db, 'Users', userId);
     const userSnap = await getDoc(userRef);
-    if (!userSnap.exists()) return [];
+
+    if (!userSnap.exists()) {
+      console.warn(`⚠️ No user found for ID: ${userId}`);
+      return [];
+    }
 
     const favoriteArtists: string[] = userSnap.data().favoriteArtists || [];
-    if (favoriteArtists.length === 0) return [];
+    if (!favoriteArtists || favoriteArtists.length === 0) {
+      console.warn(`⚠️ No favorite artists found for user ${userId}`);
+      return [];
+    }
 
+    // Step 2: Use Groq to get 10 song recommendations
     const prompt = `
-    Based on favorite artists: ${favoriteArtists.join(', ')}.
-    Suggest 10 songs that align with their musical style and taste.
-    Exclude duplicates and low-quality remixes.
-    Only return JSON array like [{"title":"Song Name","artist":"Artist Name"}].
+      Based on favorite artists: ${favoriteArtists.join(', ')}.
+      Suggest 10 songs that this user is likely to enjoy.
+      Only include new or popular songs that match these artists' styles.
+      Respond with a valid JSON array like:
+      [{"title":"Song Name","artist":"Artist Name"}]
     `;
 
     let data = await fetchFromGroq(prompt);
     if (!data) data = await fetchFromGemini(prompt);
     if (!data) return [];
 
-    const seen = new Set();
+    // Step 3: Enrich each with thumbnail
     const songs: Song[] = [];
-
-    for (let i = 0; i < data.length && songs.length < 10; i++) {
+    for (let i = 0; i < Math.min(data.length, 10); i++) {
       const item = data[i];
-      const key = `${item.title}-${item.artist}`.toLowerCase();
-      if (item.title && item.artist && !seen.has(key)) {
-        seen.add(key);
+      if (item.title && item.artist) {
         const { thumbnail, id, duration } = await getThumbnail(item.title, item.artist);
-        if (thumbnail) songs.push({ id, title: item.title, artist: item.artist, thumbnail, duration });
+        songs.push({
+          id,
+          title: item.title,
+          artist: item.artist,
+          thumbnail,
+          duration,
+        });
       }
     }
 
     return songs;
   } catch (error) {
-    console.error('Error in personalized recommendations:', error);
+    console.error('Error fetching personalized recommendations:', error);
     return [];
   }
 }
 
-// -------------------- Firestore Caching --------------------
-function isToday(timestamp: number): boolean {
-  const today = new Date().toDateString();
-  const date = new Date(timestamp).toDateString();
-  return today === date;
+// Fetch Famous Artists (Top 15 Spotify Artists by Ranking)
+
+export async function fetchFamousArtists(): Promise<Artist[]> {
+  const staticArtists = [
+    { rank: 1, name: "The Weeknd" },
+    { rank: 2, name: "Bruno Mars" },
+    { rank: 3, name: "Taylor Swift" },
+    { rank: 4, name: "Rihanna" },
+    { rank: 5, name: "Lady Gaga" },
+    { rank: 6, name: "Justin Bieber" },
+    { rank: 7, name: "Billie Eilish" },
+    { rank: 8, name: "Ed Sheeran" },
+    { rank: 9, name: "Coldplay" },
+    { rank: 10, name: "Ariana Grande" },
+    { rank: 11, name: "Bad Bunny" },
+    { rank: 12, name: "Drake" },
+    { rank: 13, name: "David Guetta" },
+    { rank: 14, name: "Sabrina Carpenter" },
+    { rank: 15, name: "Kendrick Lamar" },
+  ];
+
+  const artists: Artist[] = [];
+  for (const item of staticArtists) {
+    let image = '';
+    try {
+      const results = await searchYouTube(`${item.name} artist official`, 1);
+      image = results[0]?.thumbnail || '';
+    } catch (error) {
+      console.error('YouTube fetch failed for artist:', item.name);
+    }
+
+    // Fallback image if YouTube fails
+    if (!image) {
+      image = await getGoogleImage(`${item.name} music artist`);
+    }
+
+    artists.push({
+      id: item.name.replace(/\s+/g, '-').toLowerCase(),
+      name: item.name,
+      image,
+    });
+  }
+
+  return artists;
 }
 
+
+// Check if data is from today
+function isToday(timestamp: number): boolean {
+  const today = new Date();
+  const date = new Date(timestamp);
+  return today.toDateString() === date.toDateString();
+}
+
+// Get cached data from Firebase
 export async function getCachedMusicData(type: 'trending' | 'globalHits' | 'regionalHits' | 'famousArtists') {
-  const ref = doc(db, 'DailyMusicData', type);
-  const snap = await getDoc(ref);
-  if (snap.exists() && isToday(snap.data().timestamp)) {
-    return snap.data().data;
+  try {
+    const docRef = doc(db, 'DailyMusicData', type);
+    const docSnap = await getDoc(docRef);
+    
+    if (docSnap.exists()) {
+      const data = docSnap.data();
+      if (data.timestamp && isToday(data.timestamp)) {
+        return data.data;
+      }
+    }
+  } catch (error) {
+    console.error('Error getting cached data:', error);
   }
   return null;
 }
 
-export async function storeMusicData(
-  type: 'trending' | 'globalHits' | 'regionalHits' | 'famousArtists',
-  data: any
-) {
-  await setDoc(doc(db, 'DailyMusicData', type), { data, timestamp: Date.now() });
+// Store data in Firebase
+export async function storeMusicData(type: 'trending' | 'globalHits' | 'regionalHits' | 'famousArtists', data: any) {
+  try {
+    const docRef = doc(db, 'DailyMusicData', type);
+    await setDoc(docRef, {
+      data,
+      timestamp: Date.now()
+    });
+  } catch (error) {
+    console.error('Error storing data:', error);
+  }
 }
 
-// -------------------- Daily Refresh --------------------
+// Fetch and cache all daily data
 export async function refreshDailyMusicData() {
-  console.log('🔄 Refreshing daily music data...');
-
-  const snapshot = await getDocs(collection(db, 'DailyMusicData'));
-  for (const docu of snapshot.docs) await deleteDoc(docu.ref);
-
+  console.log('Refreshing daily music data...');
+  
+  // Delete old data
+  try {
+    const snapshot = await getDocs(collection(db, 'DailyMusicData'));
+    for (const doc of snapshot.docs) {
+      await deleteDoc(doc.ref);
+    }
+  } catch (error) {
+    console.error('Error deleting old data:', error);
+  }
+  
+  // Fetch and store new data
   const trending = await fetchTopTrending();
   await storeMusicData('trending', trending);
-
+  
   const globalHits = await fetchGlobalHits();
   await storeMusicData('globalHits', globalHits);
-
+  
   const regionalHits = await fetchRegionalHits();
   await storeMusicData('regionalHits', regionalHits);
-
+  
   const famousArtists = await fetchFamousArtists();
   await storeMusicData('famousArtists', famousArtists);
-
-  console.log('✅ Daily music data refreshed successfully');
+  
+  console.log('Daily music data refreshed successfully');
 }
