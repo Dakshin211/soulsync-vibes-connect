@@ -24,21 +24,22 @@ const YOUTUBE_API_KEYS = [
   'AIzaSyBvCugpO8QtXKBN9H3Ase-VukIR10AuhAE',
 ];
 
+
 let currentKeyIndex = 0;
 const cache = new Map<string, { data: any; timestamp: number }>();
 const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
 
+/** Rotate through API keys safely */
 function getNextApiKey(): string {
   const key = YOUTUBE_API_KEYS[currentKeyIndex];
   currentKeyIndex = (currentKeyIndex + 1) % YOUTUBE_API_KEYS.length;
   return key;
 }
 
+/** Caching logic */
 function getCachedData(cacheKey: string) {
   const cached = cache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
-    return cached.data;
-  }
+  if (cached && Date.now() - cached.timestamp < CACHE_DURATION) return cached.data;
   return null;
 }
 
@@ -46,7 +47,23 @@ function setCachedData(cacheKey: string, data: any) {
   cache.set(cacheKey, { data, timestamp: Date.now() });
 }
 
-export async function searchYouTube(query: string, maxResults: number = 10) {
+/** Convert ISO8601 duration (e.g. PT3M42S) → seconds */
+function parseDuration(duration: string): number {
+  const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!match) return 0;
+  const [_, h, m, s] = match;
+  return (parseInt(h || '0') * 3600) + (parseInt(m || '0') * 60) + parseInt(s || '0');
+}
+
+/** Duration formatting helper */
+export function formatDuration(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+/** 🔍 Core YouTube search (used by all other functions) */
+export async function searchYouTube(query: string, maxResults = 10) {
   const cacheKey = `search:${query}:${maxResults}`;
   const cached = getCachedData(cacheKey);
   if (cached) return cached;
@@ -54,50 +71,57 @@ export async function searchYouTube(query: string, maxResults: number = 10) {
   for (let attempt = 0; attempt < YOUTUBE_API_KEYS.length; attempt++) {
     try {
       const apiKey = getNextApiKey();
-      const response = await fetch(
-        `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&videoCategoryId=10&maxResults=${maxResults}&key=${apiKey}`
-      );
 
+      const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(
+        query
+      )}&type=video&videoCategoryId=10&maxResults=${maxResults}&key=${apiKey}`;
+
+      const response = await fetch(searchUrl);
       if (!response.ok) {
-        if (response.status === 403) continue; // Try next key
+        if (response.status === 403) continue;
         throw new Error(`YouTube API error: ${response.status}`);
       }
 
       const data = await response.json();
-      
-      // Get video details to filter by duration
       const videoIds = data.items.map((item: any) => item.id.videoId).join(',');
+
+      if (!videoIds) continue;
+
+      // Fetch video details (duration, etc.)
       const detailsResponse = await fetch(
         `https://www.googleapis.com/youtube/v3/videos?part=contentDetails,snippet&id=${videoIds}&key=${apiKey}`
       );
-      
       const detailsData = await detailsResponse.json();
-      
-      // Filter songs (1-15 minutes duration)
+
+      // Filter & map results
       const songs = detailsData.items
         .filter((video: any) => {
-          const duration = parseDuration(video.contentDetails.duration);
-          return duration >= 60 && duration <= 900;
+          const dur = parseDuration(video.contentDetails.duration);
+          return dur >= 60 && dur <= 900; // 1–15 min
         })
         .map((video: any) => ({
           id: video.id,
           title: video.snippet.title,
           artist: video.snippet.channelTitle,
-          thumbnail: video.snippet.thumbnails.high?.url || video.snippet.thumbnails.default.url,
+          thumbnail: video.snippet.thumbnails.high?.url || video.snippet.thumbnails.default?.url,
           duration: parseDuration(video.contentDetails.duration),
         }));
 
-      setCachedData(cacheKey, songs);
-      return songs;
-    } catch (error) {
-      console.error(`Error with API key ${attempt + 1}:`, error);
+      if (songs.length) {
+        setCachedData(cacheKey, songs);
+        return songs;
+      }
+    } catch (err) {
+      console.error(`YouTube search error (attempt ${attempt + 1}):`, err);
     }
   }
 
+  console.warn('All YouTube API keys failed or returned no results.');
   return [];
 }
 
-export async function getTrendingSongs(maxResults: number = 20) {
+/** 📈 Fetch trending songs (US region) */
+export async function getTrendingSongs(maxResults = 20) {
   const cacheKey = `trending:${maxResults}`;
   const cached = getCachedData(cacheKey);
   if (cached) return cached;
@@ -115,42 +139,45 @@ export async function getTrendingSongs(maxResults: number = 20) {
       }
 
       const data = await response.json();
-      
       const songs = data.items
-        .filter((video: any) => {
-          const duration = parseDuration(video.contentDetails.duration);
-          return duration >= 60 && duration <= 900;
+        .filter((v: any) => {
+          const dur = parseDuration(v.contentDetails.duration);
+          return dur >= 60 && dur <= 900;
         })
-        .map((video: any) => ({
-          id: video.id,
-          title: video.snippet.title,
-          artist: video.snippet.channelTitle,
-          thumbnail: video.snippet.thumbnails.high?.url || video.snippet.thumbnails.default.url,
-          duration: parseDuration(video.contentDetails.duration),
+        .map((v: any) => ({
+          id: v.id,
+          title: v.snippet.title,
+          artist: v.snippet.channelTitle,
+          thumbnail: v.snippet.thumbnails.high?.url || v.snippet.thumbnails.default?.url,
+          duration: parseDuration(v.contentDetails.duration),
         }));
 
-      setCachedData(cacheKey, songs);
-      return songs;
-    } catch (error) {
-      console.error(`Error with API key ${attempt + 1}:`, error);
+      if (songs.length) {
+        setCachedData(cacheKey, songs);
+        return songs;
+      }
+    } catch (err) {
+      console.error(`Trending fetch error (attempt ${attempt + 1}):`, err);
     }
   }
 
   return [];
 }
 
-export async function getArtistSongs(artistName: string, maxResults: number = 10) {
+/** 🎤 Fetch songs by artist name */
+export async function getArtistSongs(artistName: string, maxResults = 10) {
   const cacheKey = `artist:${artistName}:${maxResults}`;
   const cached = getCachedData(cacheKey);
   if (cached) return cached;
 
-  const songs = await searchYouTube(`${artistName} official audio`, maxResults);
-  setCachedData(cacheKey, songs);
-  return songs;
+  const results = await searchYouTube(`${artistName} official audio`, maxResults);
+  setCachedData(cacheKey, results);
+  return results;
 }
 
+/** 🧑‍🎤 Fetch artist profiles */
 export async function searchArtists(query: string) {
-  const cacheKey = `artists:${query}`;
+  const cacheKey = `artistSearch:${query}`;
   const cached = getCachedData(cacheKey);
   if (cached) return cached;
 
@@ -158,44 +185,29 @@ export async function searchArtists(query: string) {
     try {
       const apiKey = getNextApiKey();
       const response = await fetch(
-        `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=channel&maxResults=10&key=${apiKey}`
+        `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(
+          query
+        )}&type=channel&maxResults=10&key=${apiKey}`
       );
 
       if (!response.ok) {
         if (response.status === 403) continue;
-        throw new Error(`YouTube API error: ${response.status}`);
+        throw new Error(`YouTube artist search error: ${response.status}`);
       }
 
       const data = await response.json();
-      const artists = data.items.map((item: any) => ({
-        id: item.id.channelId,
-        name: item.snippet.title,
-        image: item.snippet.thumbnails.high?.url || item.snippet.thumbnails.default.url,
+      const artists = data.items.map((ch: any) => ({
+        id: ch.id.channelId,
+        name: ch.snippet.title,
+        image: ch.snippet.thumbnails.high?.url || ch.snippet.thumbnails.default?.url,
       }));
 
       setCachedData(cacheKey, artists);
       return artists;
-    } catch (error) {
-      console.error(`Error with API key ${attempt + 1}:`, error);
+    } catch (err) {
+      console.error(`Artist search error (attempt ${attempt + 1}):`, err);
     }
   }
 
   return [];
-}
-
-function parseDuration(duration: string): number {
-  const match = duration.match(/PT(\d+H)?(\d+M)?(\d+S)?/);
-  if (!match) return 0;
-
-  const hours = parseInt(match[1]) || 0;
-  const minutes = parseInt(match[2]) || 0;
-  const seconds = parseInt(match[3]) || 0;
-
-  return hours * 3600 + minutes * 60 + seconds;
-}
-
-export function formatDuration(seconds: number): string {
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
